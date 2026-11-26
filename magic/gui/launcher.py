@@ -226,7 +226,9 @@ def main(open_path=None, check_updates=True):
         except OSError:
             pass
         from tkinter import messagebox
-        messagebox.showerror(APP_NAME, f"啟動失敗：\n\n{tb.strip().splitlines()[-1]}\n\n詳細記錄：{log}")
+        if messagebox.askyesno(APP_NAME, f"啟動失敗：\n\n{tb.strip().splitlines()[-1]}\n\n詳細記錄：{log}\n\n"
+                                         "要把錯誤紀錄打包成 zip（放在桌面），方便傳給維護軟體的人嗎？", icon="error"):
+            _offer_report(None)
         root.destroy()
         return 1
     splash.close()
@@ -307,6 +309,17 @@ def set_taskbar_relaunch(root):
         return False
 
 
+def _offer_report(parent):
+    from tkinter import messagebox
+    try:
+        from ..core.report import make_report, open_folder
+        fp = make_report()
+        messagebox.showinfo(APP_NAME, f"已存好：\n{fp}\n\n把這個 zip 傳給維護軟體的人就可以了。", parent=parent)
+        open_folder(fp.parent)
+    except Exception as e:
+        messagebox.showerror(APP_NAME, f"打包失敗：{e}", parent=parent)
+
+
 def _report_callback(root):
     """介面操作中發生未預期錯誤時：寫 log + 跳出提示，不會整個關掉。"""
     def handler(exc, val, tb):
@@ -320,7 +333,10 @@ def _report_callback(root):
             pass
         try:
             from tkinter import messagebox
-            messagebox.showerror(APP_NAME, f"發生錯誤：{val}\n\n詳細記錄：{log}", parent=root)
+            if messagebox.askyesno(APP_NAME, f"發生錯誤：{val}\n\n詳細記錄：{log}\n\n"
+                                             "要把錯誤紀錄打包成 zip（放在桌面），方便傳給維護軟體的人嗎？"
+                                             "（也可以之後在 ⚙ 設定 → 更新 打包）", icon="error", parent=root):
+                _offer_report(root)
         except Exception:
             pass
     return handler

@@ -87,6 +87,10 @@ class EtchWizard(tk.Toplevel):
         self._build_form(right)
         if edit:
             self._load(store.record_to_inputs(edit["row"]))
+            for which, slot in self.om_slots.items():
+                rel = str(edit["row"].get(f"OM {which}", "") or "")
+                found = store.resolve_image(panel.csv_path(), rel)
+                slot.set(str(found) if found else (rel or None), notify=False)
             self.ok_btn.configure(text="儲存修改")
             self.keep_box.pack_forget()
         else:
@@ -386,6 +390,17 @@ class EtchWizard(tk.Toplevel):
                                                         "算光阻蝕刻率、材料 / 光阻選擇比，判斷光阻夠不夠厚")
         self._field(g, 0, "resist_after", "光阻蝕刻後厚度 (nm)", tip="蝕刻後、去光阻前，用 AFM 或膜厚儀量的光阻厚度")
 
+        g = self._section(body, "OM 照片（選填）", "📷", "光學顯微鏡照片，蝕刻前、後各一張；沒有可以空白。"
+                                                        "照片會複製到紀錄旁邊的 _images 資料夾，原始檔不會被修改")
+        from .om_images import OMSlot
+        of = tk.Frame(g, bg=T.CARD)
+        of.grid(row=0, column=0, columnspan=4, sticky="w")
+        self.om_slots = {}
+        for k, (which, title) in enumerate((("before", "蝕刻前"), ("after", "蝕刻後"))):
+            slot = OMSlot(of, f"OM {title}", self.key, on_change=self.schedule, size=(200, 140))
+            slot.grid(row=0, column=k, padx=(0, 8), sticky="n")
+            self.om_slots[which] = slot
+
         g = self._section(body, "備註", "✎")
         self._field(g, 0, "notes", "備註（選填）", width=30)
 
@@ -515,6 +530,9 @@ class EtchWizard(tk.Toplevel):
             vals["T"] = T_.mean if T_ else max(res.d_mat * 1.6, 10.0)
             tm = res.measures.get("marker_before")
             vals["T_m"] = tm.mean if tm else 50.0
+            rb = res.measures.get("resist_thickness")
+            if res.d_resist is not None and rb is not None and rb.mean > 0:
+                vals["resist_frac"] = max(0.0, min(res.d_resist / rb.mean, 1.0))   # 動畫裡光阻跟著變薄
             mat = inp.material or "材料"
             bound = "≥ " if res.lower_bound else ""
             self.big.configure(text=f"r_{mat} = {bound}{res.r_mat:.4g} ± {res.sr_mat:.2g} nm/s",
@@ -603,6 +621,9 @@ class EtchWizard(tk.Toplevel):
                 "可能重複", f"第 {', '.join(map(str, dup))} 筆的輸入和這筆完全一樣。\n還是要寫入嗎？", parent=self):
             return
         notes = []
+        rec["Record ID"] = store.new_id()
+        rec["Revision"] = 1
+        notes += self._attach_om(rec, path)
         try:
             rec = store.append_record(rec, path)
         except store.NeedsUpgrade:
@@ -649,8 +670,32 @@ class EtchWizard(tk.Toplevel):
         if self.keep_var.get():
             for k in (MULTI - {"resist_thickness"}) | {"notes"}:
                 self.vars[k].set("")
+            for slot in self.om_slots.values():
+                slot.set(None, notify=False)
         else:
             self.close()
+
+    def _attach_om(self, rec, path, rid=None):
+        """把選的 OM 照片複製到紀錄旁邊的 _images 資料夾，路徑寫進 rec。回傳要顯示的訊息。"""
+        rid = rid or rec["Record ID"]
+        msgs = []
+        for which, slot in self.om_slots.items():
+            src = slot.value
+            if not src:
+                rec[f"OM {which}"] = ""
+                continue
+            if not os.path.isfile(src):                  # 修改時原本的照片不見了：保留原本的路徑
+                rec[f"OM {which}"] = (self.edit or {}).get("row", {}).get(f"OM {which}", "") if self.edit else ""
+                msgs.append(f"找不到 OM 照片：{os.path.basename(src)}")
+                continue
+            try:
+                rec[f"OM {which}"] = store.attach_image(path, rid, which, src)
+            except OSError as e:
+                rec[f"OM {which}"] = ""
+                msgs.append(f"OM 照片複製失敗：{e}")
+        if any(rec.get(f"OM {w}") for w in self.om_slots):
+            msgs.append("OM 照片已存到 " + store.images_dir(path).name)
+        return msgs
 
     def import_afm(self, key):
         """📈：從 AFM line profile 檔找台階高度，填進這個欄位。"""
@@ -662,6 +707,7 @@ class EtchWizard(tk.Toplevel):
     def _save_edit(self, rec, path):
         """修改模式：取代那一筆（舊值寫進修改歷史），同步 Excel / Google Sheet。"""
         rid, n = self.edit["rid"], self.edit["n"]
+        extra = self._attach_om(rec, path, rid)
         try:
             old, new = store.replace_record(path, rid, rec)
         except store.RecordNotFound as e:
@@ -670,7 +716,7 @@ class EtchWizard(tk.Toplevel):
         except OSError as e:
             messagebox.showerror("修改紀錄", f"寫入 CSV 失敗（檔案是不是被 Excel 開著？）：\n{e}", parent=self)
             return
-        notes = [f"第 {n} 筆已修改（修改前的值在「修改歷史」，可以還原）"]
+        notes = [f"第 {n} 筆已修改（修改前的值在「修改歷史」，可以還原）"] + extra
         et = self.app.settings.get("etching", {})
         if et.get("xlsx_mirror"):
             try:

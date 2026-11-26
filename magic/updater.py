@@ -379,10 +379,11 @@ PERSONAL_FILES = ("settings.toml", "gui_state.json", "service_account.json")
 
 
 def run_selftest(root, log=print, python=None):
-    """在工具資料夾跑 python -m magic selftest（獨立的行程，用的是資料夾裡的新程式）。回傳 True/False。"""
+    """在工具資料夾跑 python -m magic selftest --release（獨立的行程，用的是資料夾裡的新程式）。
+    發佈前一定要實際開視窗跑過：每個功能畫一次、量切換機台 / 背景計算 / 動畫的流暢度，沒通過就不上傳。回傳 True/False。"""
     import sys as _sys
     env = dict(os.environ, PYTHONUTF8="1", PYTHONIOENCODING="utf-8", MPLBACKEND="Agg")
-    proc = subprocess.Popen([python or _sys.executable, "-m", "magic", "selftest"], cwd=root, env=env,
+    proc = subprocess.Popen([python or _sys.executable, "-m", "magic", "selftest", "--release"], cwd=root, env=env,
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8",
                             errors="replace")
     for line in proc.stdout:
@@ -474,7 +475,7 @@ def publish(log=print, ask=input, root=None, test=True):
         return False
 
     if test:
-        log("\n--- 上傳前自我測試（約 15–40 秒）---")
+        log("\n--- 上傳前自我測試：會實際開視窗操作每個功能、量切換與動畫的流暢度（約 40–70 秒，期間請不要點視窗）---")
         if not run_selftest(root, log):
             ans = (ask("\n自我測試沒有通過，所以還沒上傳（避免把壞掉的版本推給同事）。\n"
                        "確定要強制上傳請輸入 yes，直接 Enter = 取消：") or "").strip().lower()

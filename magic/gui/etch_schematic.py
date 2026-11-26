@@ -44,10 +44,10 @@ class Geometry:
         top_nm = max(T_mat, T_m + d_s, 30.0)
         self.s = min(2.4, (h * 0.30) / top_nm)            # px / nm（材料、marker、SiO2 凹陷共用）
         self.base = h * 0.62                               # 蝕刻前 SiO2 表面
-        self.resist_px = min(70.0, max(30.0, h * 0.14))
+        self.resist_px = min(46.0, max(26.0, h * 0.085))      # 光阻膜厚（不按比例；薄一點才看得出丘陵狀）
         X = lambda f: w * f                                # noqa: E731
         self.sub = (X(0.03), X(0.97))
-        self.prot_sio2 = (X(0.05), X(0.15))                # 光阻保護的 SiO2（量 SiO2 台階用）
+        self.prot_sio2 = (X(0.04), X(0.11))                # 光阻保護的 SiO2（量 SiO2 台階用）
         self.flake = (X(0.21), X(0.69))
         lw = vals.get("line_width")
         gap = 0.07 if not lw else min(0.12, max(0.025, 0.035 + 0.03 * math.log10(max(lw, 10) / 100)))
@@ -127,6 +127,8 @@ class Schematic(tk.Canvas):
         etched = st >= 4
         tau = self.tau if st == 4 else (self.vals.get("t", 30.0) if st > 4 else 0.0)
         d_mat, d_s, under = self.depths(tau) if etched else (0.0, 0.0, 0.0)
+        frac = float(self.vals.get("resist_frac", 0.0) or 0.0)       # 光阻最後被吃掉的比例
+        self._thin = frac * min(tau / max(self.vals.get("t", 30.0), 1e-9), 1.0) if st == 4 else 0.0
         T = self.vals.get("T", 60.0)
         T_m = self.vals.get("T_m", 50.0)
         own = self.vals.get("marker_etched", 0.0) if etched else 0.0
@@ -192,22 +194,71 @@ class Schematic(tk.Canvas):
         self.create_text((fx0 + fx1) / 2, g.base + 14, text=name, font=TH.font(9, "bold"), fill=C["mat_dark"])
         self.create_text(sum(g.marker) / 2, g.base + 14, text="marker", font=TH.font(9, "bold"), fill=C["marker_edge"])
 
+    # ------------------------------------------------------------------ 光阻（貼在樣品上的保護膜）
+    def resist_profile(self, g, T, T_m):
+        """旋轉塗佈的光阻像一層保護膜：底面貼著樣品（基板、材料、marker），頂面在材料和 marker 上方
+        鼓起來（像丘陵，邊緣是平滑的斜坡），越高的東西上面光阻越薄。回傳 (xs, 底面 y, 頂面 y)。"""
+        import numpy as np
+        x0, x1 = g.sub
+        xs = np.arange(x0, x1 + 1.0, 2.0)
+        h = np.zeros_like(xs)
+        for (a, b), hh in ((g.flake, T), (g.marker, T_m)):
+            h[(xs >= a) & (xs <= b)] = max(hh, 0.0) * g.s
+        bottom = g.base - h
+        t = g.resist_px                                         # 膜厚（不按比例）
+        r = max(int(0.5 * t / 2.0), 1)                          # 膜蓋過邊緣時往外延伸的距離（點數，每點 2 px）
+        pad = np.pad(h, r, mode="edge")
+        win = np.lib.stride_tricks.sliding_window_view(pad, 2 * r + 1)
+        hd = win.max(axis=1)                                    # 先往外擴（膜在邊緣像帳篷一樣蓋過去）
+        k = max(int(0.75 * t / 2.0), 2)
+        ker = np.hanning(2 * k + 1)
+        ker /= ker.sum()
+        hs = np.convolve(np.pad(hd, k, mode="edge"), ker, mode="same")[k:-k]   # 再平滑 → 圓弧的肩、丘陵
+        top = g.base - t - hs
+        top = np.minimum(top, bottom - 0.8 * t)                 # 任何地方的膜厚都至少 0.8 t
+        thin = float(getattr(self, "_thin", 0.0) or 0.0)        # 蝕刻時光阻被吃掉的比例（有光阻蝕刻率才有）
+        if thin > 0:
+            top = top + (bottom - top) * min(thin, 0.9)
+        return xs, bottom, top
+
+    def _resist_poly(self, xs, bottom, top, a, b, **kw):
+        m = (xs >= a) & (xs <= b)
+        if m.sum() < 2:
+            return
+        xa, ba, ta = xs[m], bottom[m], top[m]
+        pts = [a, ta[0]] + [v for x, y in zip(xa, ta) for v in (x, y)] + [b, ta[-1], b, ba[-1]] + \
+              [v for x, y in zip(xa[::-1], ba[::-1]) for v in (x, y)] + [a, ba[0]]
+        self.create_polygon(*pts, **kw)
+
     def _resist(self, g, st, T, T_m):
-        top = g.y(max(T, T_m)) - g.resist_px
+        xs, bottom, top = self.resist_profile(g, T, T_m)
         name = self.vals.get("resist", "PMMA") or "光阻"
+        style = dict(fill=C["resist"], outline=C["resist_edge"], width=1.2, stipple="gray50")
         if st in (1, 2):
             x0, x1 = g.sub
-            self.create_rectangle(x0, top, x1, g.base, fill=C["resist"], outline=C["resist_edge"], stipple="gray50")
+            self._resist_poly(xs, bottom, top, x0, x1, **style)
             if st == 2:
                 for a, b in self._exposed(g):
-                    self.create_rectangle(a, top, b, g.base, fill=C["resist_exp"], outline="", stipple="gray50")
-            self.create_text(x0 + 8, top + 10, text=f"{name}（不按比例）", anchor="w", font=TH.font(8),
+                    self._resist_poly(xs, bottom, top, a, b, fill=C["resist_exp"], outline="", stipple="gray50")
+            self.create_text(x0 + 8, float(top[0]) + 10, text=f"{name}（不按比例）", anchor="w", font=TH.font(8),
                              fill=C["resist_edge"])
         else:
             for a, b in g.resist_blocks:
-                self.create_rectangle(a, top, b, g.base, fill=C["resist"], outline=C["resist_edge"], stipple="gray50")
-            self.create_text(g.resist_blocks[0][0], top - 8, text=f"{name} 遮罩", anchor="w", font=TH.font(8),
+                self._resist_poly(xs, bottom, top, a, b, **style)
+            a0 = g.resist_blocks[0][0]
+            self.create_text(a0, float(top.min()) - 8, text=f"{name} 遮罩", anchor="w", font=TH.font(8),
                              fill=C["resist_edge"])
+
+    def resist_top(self, g, x):
+        """x 位置的光阻頂面（粒子落下的高度）。"""
+        import numpy as np
+        T, T_m = self.vals.get("T", 60.0), self.vals.get("T_m", 50.0)
+        key = (g.W, g.H, T, T_m, getattr(self, "_thin", 0.0))
+        if getattr(self, "_rp_key", None) != key:
+            self._rp = self.resist_profile(g, T, T_m)
+            self._rp_key = key
+        xs, _, top = self._rp
+        return float(np.interp(x, xs, top))
 
     def _exposed(self, g):
         x0, x1 = g.sub
@@ -218,16 +269,15 @@ class Schematic(tk.Canvas):
         top = g.H * 0.06
         for a, b in self._exposed(g):
             for x in (a + (b - a) * f for f in (0.3, 0.7)):
-                self.create_line(x, top, x, g.base - g.resist_px - 30, fill=C["beam"], width=2, arrow="last")
+                self.create_line(x, top, x, self.resist_top(g, x) - 4, fill=C["beam"], width=2, arrow="last")
         self.create_text(g.W / 2, top - 2, text="e-beam", font=TH.font(9, "bold"), fill=C["beam"], anchor="s")
 
     def surface_y(self, g, x, d_mat, d_s):
         """粒子落下的高度：有光阻 → 光阻頂；材料開口 → 材料表面；其他 → SiO2 表面。"""
         T, T_m = self.vals.get("T", 60.0), self.vals.get("T_m", 50.0)
-        top = g.y(max(T, T_m)) - g.resist_px
         for a, b in g.resist_blocks:
             if a <= x <= b:
-                return top
+                return self.resist_top(g, x)
         if g.flake[0] <= x <= g.flake[1]:
             return g.y(T - d_mat)
         if g.marker[0] <= x <= g.marker[1]:

@@ -17,7 +17,8 @@ COLS = [("#", "#", 40, "e"), ("DateTime", "日期", 128, "w"), ("Material", "材
         ("Method", "機台", 62, "w"), ("Gas", "氣體", 70, "w"), ("Power", "功率", 110, "w"),
         ("Pressure", "壓力", 62, "w"), ("Line width (nm)", "線寬", 52, "e"), ("Etch steps (s)", "時間 (s)", 66, "e"),
         ("R_hBN(nm/sec)", "R_材料", 64, "e"), ("σ R_material (nm/sec)", "±", 46, "e"),
-        ("R_SiO2(nm/sec)", "R_SiO2", 64, "e"), ("Etched through", "蝕穿", 40, "center"), ("Name", "操作者", 64, "w")]
+        ("R_SiO2(nm/sec)", "R_SiO2", 64, "e"), ("Etched through", "蝕穿", 40, "center"), ("OM after", "OM", 36, "center"),
+        ("Name", "操作者", 64, "w")]
 SOURCES = ["本機 CSV", "Google Sheet", "範例資料（唯讀）"]
 
 
@@ -52,6 +53,7 @@ class RecordsPanel(tk.Frame):
         for text, cmd, tip in (("✎ 修改", self.edit_selected, "修改選取的那一筆（也可以在表格上雙擊）；修改前的值會留在修改歷史"),
                                ("🗑 刪除", self.delete_selected, "刪除選取的紀錄；刪掉的紀錄會留在修改歷史，可以還原"),
                                ("🕘 修改歷史", self.show_history, "看修改、刪除過哪些紀錄，可以還原"),
+                               ("🖼 OM", self.show_om, "看選取那一筆的蝕刻前 / 後 OM 照片"),
                                ("複製條件", self.new_from_selected, "用選取那一筆的條件開新紀錄（量測值留空）"),
                                ("匯出 Excel", self.export_xlsx, "")):
             b = ttk.Button(bar2, text=text, style=f"{key}.Small.TButton", command=cmd)
@@ -218,6 +220,8 @@ class RecordsPanel(tk.Frame):
                 v = r.get(c, "")
                 if c == "Etched through":
                     v = "▲" if bool(v) else ""
+                elif c == "OM after":
+                    v = "📷" if (str(r.get("OM before", "")).strip() or str(v).strip()) else ""
                 elif isinstance(v, float):
                     v = "" if v != v else (f"{v:.4g}" if ("R_" in c or "σ" in c) else f"{v:g}")
                 vals.append(v)
@@ -434,3 +438,23 @@ class RecordsPanel(tk.Frame):
         win.tree = tree
         win.entries = entries
         return win
+
+    def show_om(self):
+        """並排看選取那一筆的 OM 照片。"""
+        sel = self.tree.selection()
+        if not sel or self.df is None:
+            messagebox.showinfo("OM 照片", "先在表格選一筆紀錄", parent=self)
+            return None
+        row = self.df[self.df["#"] == int(sel[0])].iloc[0]
+        src = self.source_path()
+        base = src if src != "Google Sheet" else str(self.csv_path())
+        items = []
+        for which, title in (("before", "蝕刻前"), ("after", "蝕刻後")):
+            rel = str(row.get(f"OM {which}", "") or "")
+            p = store.resolve_image(base, rel) or store.resolve_image(self.csv_path(), rel)
+            items.append((f"{title}　#{sel[0]}", str(p) if p else (f"找不到：{rel}" if rel else None)))
+        if not any(p for _, p in items):
+            messagebox.showinfo("OM 照片", "這筆紀錄沒有 OM 照片（可以 ✎ 修改 加上去）", parent=self)
+            return None
+        from .om_images import OMViewer
+        return OMViewer(self.winfo_toplevel(), items, self.key, title=f"OM 照片 — 第 {sel[0]} 筆")

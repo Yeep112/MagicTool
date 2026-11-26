@@ -130,13 +130,17 @@ H_m,out / H_out = 蝕刻後從 SiO2 表面量到 marker / 材料頂端的高度�
 - **📈 匯入 AFM line profile**：量測欄位旁的 📈 → 選 Gwyddion「匯出文字」或 NanoScope 的 section 匯出檔（可多選、一個檔案多條），
   自動找兩個平台（同時扣掉傾斜，邊緣附近的點不用），每條 profile 一個高度，填回欄位（平均 ± 標準差）。
   邊緣有殘膠時可以改成「手動：拖曳選低 / 高的平台」。
+- **📷 OM 照片（選填）**：精靈裡可以放蝕刻前、後的光學顯微鏡照片（png / jpg / tif，16 bit 也可以），點縮圖放大。
+  照片複製到紀錄旁邊的 `<紀錄檔名>_images\`（檔名 = Record ID_before / _after），CSV 只記相對路徑，原始照片不動；
+  換照片時舊的那張改名留著。表格的 📷 = 有照片，「🖼 OM」並排看蝕刻前 / 後。Google Sheet 只會有路徑（照片在本機）。
+- **示意圖**：光阻畫成貼在樣品上的膜，材料和 marker 上方會像丘陵一樣鼓起來；有填光阻蝕刻後厚度時，蝕刻動畫裡光阻也會跟著變薄。
 - **✎ 修改 / 🗑 刪除 / 🕘 修改歷史**：雙擊表格的一筆就能修改（量測值、條件都帶入）；修改前的值、刪除的紀錄都寫進
   `<紀錄檔名>.history.csv`，「修改歷史」可以還原。每筆紀錄有 `Record ID`、`Revision`、`Modified at`；
   Google Sheet 會用 Record ID 找到同一列一起修改 / 刪除（找不到時不會亂改，會請你手動處理）。
 
 **CSV 格式（v2）**：原本 20 個欄位**順序、意義都不變**，新欄位全部加在後面（`Schema`、`Material`、`Line width (nm)`、`Gas 1`～`Flow 3 (sccm)`、
 `ICP power (W)`、`RF power (W)`、`Pressure (Pa)`、`Etch steps (s)`、`SiO2 method`、`Material method`、`d_* / σ_*`、`Selectivity`、
-`Etched through`、`Raw inputs`（原始輸入，JSON）、`Notes`）。
+`Etched through`、`Raw inputs`（原始輸入，JSON）、`Notes`；v0.3 再加光阻、交叉檢查、`Record ID` 等，v0.4 加 `OM before`、`OM after`）。
 
 | 情況 | 做法 |
 |---|---|
@@ -144,7 +148,7 @@ H_m,out / H_out = 蝕刻後從 SiO2 表面量到 marker / 材料頂端的高度�
 | 舊公式 `R_hBN = (Δ_hBN + Δ_marker) / T` | 新紀錄仍然成立（`R_hBN(nm/sec)` 欄位現在代表「選的材料」的蝕刻率） |
 | Google Sheet | 第一列是舊標題 → 只在後面補新欄位名稱，資料列不動；第一列看不懂 → 不寫入，避免寫錯位置 |
 | Excel 副本 | 舊標題會補上新欄位 |
-| 0.2 版寫的 CSV | v0.3 又在最後面加了 `Resist after (nm)`、`R_resist (nm/sec)`、`Selectivity (material/resist)`、`SiO2 cross-check`、`Material cross-check`、`Record ID`、`Revision`、`Modified at`：寫入時自動備份（`*.v0.2備份_日期.csv`）再補上 |
+| 舊版（0.2 / 0.3）寫的 CSV | 0.3、0.4 又在最後面加了 `Resist after (nm)`、`R_resist (nm/sec)`、`Selectivity (material/resist)`、`SiO2 cross-check`、`Material cross-check`、`Record ID`、`Revision`、`Modified at`、`OM before`、`OM after`：寫入時自動備份（`*.升級前備份_日期.csv`）再補上 |
 
 ## 和原本 notebook / yeep_lab 的差別
 
@@ -202,9 +206,19 @@ def my_analysis(fig, items, p, data=None):
 ## 自我測試
 
 ```
-run_magic.bat selftest        （publish.bat 上傳前會自動跑，沒通過就不上傳）
+run_magic.bat selftest            （平常檢查）
+python -m magic selftest --release（發佈前檢查：一定要實際開視窗、量流暢度；publish.bat 會自動跑，沒通過就不上傳）
 python -m pytest -q           （不含視窗的部分）
 ```
 
 只用程式產生的合成資料，檢查：每個分析的數值和正確答案一致（Tc、峰位、FWHM、Hc）、讀檔、蝕刻速率、設定檔、
-notebook 清除輸出、自動更新流程，以及軟體視窗（每個功能實際畫一次、切換機台的時間、背景計算時畫面不能卡住、固定大小的圖不被壓縮）。
+notebook 清除輸出、自動更新流程、錯誤回報打包，以及軟體視窗（每個功能實際畫一次、切換機台的時間、背景計算時畫面不能卡住、
+蝕刻動畫不掉格、固定大小的圖不被壓縮、Raman 編修與峰標註、蝕刻紀錄修改 / 刪除 / OM 照片）。
+流暢度標準：切換機台 < 150 ms、背景計算時畫面停頓 < 600 ms、動畫每一格 < 100 ms。
+
+## 出問題時（錯誤回報）
+
+- 發生錯誤時會跳出提示，可以直接按「是」把錯誤紀錄打包；或之後到 **⚙ 設定 → 更新 → 📦 打包錯誤紀錄**。
+- 會在桌面產生 `MagicTool_錯誤回報_v版本_日期.zip`（路徑也會複製好），傳給維護軟體的人就可以。
+- 內容：error.log、crash.log、app.log（各最後 2 MB）、環境（版本、Python、套件、系統）、設定檔（Google Sheet 網址與金鑰路徑已遮掉）；
+  **不包含**量測資料、蝕刻紀錄、金鑰。

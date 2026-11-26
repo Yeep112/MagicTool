@@ -189,6 +189,13 @@ class SettingsDialog(tk.Toplevel):
         row.grid(row=2, column=0, columnspan=3, sticky="w", pady=8)
         ttk.Button(row, text="檢查更新", style="Neutral.Small.TButton", command=self.app.check_update_manual).pack(side="left")
         ttk.Button(row, text="還原上一版", style="Neutral.Small.TButton", command=self.rollback).pack(side="left", padx=6)
+        rep = tk.Frame(body, bg="#fef3c7", padx=10, pady=8)
+        rep.grid(row=4, column=0, columnspan=3, sticky="ew", pady=(10, 0))
+        tk.Label(rep, text="出問題了嗎？", bg="#fef3c7", fg="#92400e", font=T.font(10, "bold")).pack(anchor="w")
+        tk.Label(rep, text="把 error.log、crash.log 和電腦環境打包成一個 zip（放在桌面），直接傳給維護軟體的人。"
+                           "不包含量測資料、蝕刻紀錄和金鑰。", bg="#fef3c7", fg="#92400e", font=T.font(9),
+                 wraplength=T.px(520), justify="left").pack(anchor="w", pady=(2, 6))
+        ttk.Button(rep, text="📦 打包錯誤紀錄", style="Neutral.Small.TButton", command=self.make_report).pack(anchor="w")
         txt = tk.Text(body, height=16, wrap="word", font=T.font(9), bg=T.TEXT_BG, bd=0, highlightthickness=1,
                       highlightbackground=T.BORDER)
         txt.grid(row=3, column=0, columnspan=3, sticky="nsew")
@@ -246,6 +253,24 @@ class SettingsDialog(tk.Toplevel):
             self.app.post(("call", lambda: self.test_lab.winfo_exists() and self.test_lab.configure(
                 text=msg, fg=T.SUCCESS if ok else T.ERROR)))
         threading.Thread(target=work, daemon=True).start()
+
+    def make_report(self, note=""):
+        from ..core.report import make_report, open_folder
+        try:
+            fp = make_report(note=note)
+        except Exception as e:
+            messagebox.showerror("打包錯誤紀錄", f"打包失敗：{e}", parent=self)
+            return None
+        try:
+            self.clipboard_clear()
+            self.clipboard_append(str(fp))
+        except tk.TclError:
+            pass
+        self.app.status(f"已打包錯誤紀錄：{fp}", "ok", open_path=str(fp.parent))
+        if messagebox.askyesno("打包錯誤紀錄", f"已存好：\n{fp}\n\n（路徑已複製）把這個 zip 傳給維護軟體的人就可以了。\n\n要打開資料夾嗎？",
+                               parent=self):
+            open_folder(fp.parent)
+        return fp
 
     def rollback(self):
         from .. import updater

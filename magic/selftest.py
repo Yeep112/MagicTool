@@ -382,8 +382,32 @@ def _check_etching_03(paths, FakeWS):
     except store.RecordNotFound:
         pass
     out.append("修改 / 刪除 / 歷史還原")
+    # --- OM 照片：複製到 _images、相對路徑、換照片時舊的留著 ---
+    import numpy as _np
+    from PIL import Image
+    src_dir = os.path.join(folder, "photos")
+    os.makedirs(src_dir, exist_ok=True)
+    pics = []
+    for k in range(2):
+        fp = os.path.join(src_dir, f"om{k}.png")
+        Image.fromarray((_np.random.default_rng(k).random((40, 60, 3)) * 255).astype("uint8")).save(fp)
+        pics.append(fp)
+    rel = store.attach_image(path, ids[1], "before", pics[0])
+    assert rel == f"log_images/{ids[1]}_before.png", rel
+    assert store.resolve_image(path, rel) is not None and os.path.exists(pics[0]), "原始照片要留著"
+    assert store.attach_image(path, ids[1], "before", str(store.resolve_image(path, rel))) == rel, "同一張不要重複複製"
+    store.attach_image(path, ids[1], "before", pics[1])
+    olds = [n for n in os.listdir(store.images_dir(path)) if "_old_" in n]
+    assert len(olds) == 1, "換照片時舊的要改名留著"
+    assert store.resolve_image(path, "log_images/不存在.png") is None
+    inp = EtchInput(**{**back, "mat_out": "41"})
+    rec = store.make_record(inp, compute(inp))
+    rec["OM before"] = rel
+    store.replace_record(path, ids[1], rec)
+    assert store.read_log(path)["OM before"].iloc[1] == rel
+    out.append("OM 照片")
     # --- 0.2 寫的檔案（少了後面的欄位）→ 自動備份、補欄位 ---
-    old_head = store.HEADERS[:len(store.HEADERS) - len(store.EXTRA_03)]
+    old_head = store.HEADERS[:len(store.HEADERS) - len(store.EXTRA_03) - len(store.EXTRA_04)]
     p02 = os.path.join(folder, "v02.csv")
     with open(p02, "w", encoding="utf-8-sig", newline="") as f:
         w = _csv.writer(f)
@@ -392,7 +416,7 @@ def _check_etching_03(paths, FakeWS):
     assert store.file_schema(p02) == "v2old"
     store.append_record(recs[1], p02)
     assert store.file_schema(p02) == "v2" and len(store.read_log(p02)) == 2
-    assert any("v0.2備份" in n for n in os.listdir(folder)), "0.2 的檔案升級前要備份"
+    assert any("升級前備份" in n for n in os.listdir(folder)), "0.2 的檔案升級前要備份"
     assert all(store.read_log(p02)["Record ID"]), "升級時要補上 Record ID"
     # --- Google Sheet：修改、刪除對到正確的列 ---
     ws = FakeWS([store.HEADERS] + [[str(store._cell(r.get(c, ""))) for c in store.HEADERS] for r in recs])
@@ -445,6 +469,29 @@ def _check_etching_03(paths, FakeWS):
     _near(f["w₀ (nm)"].iloc[0], TRUTH["etch_w0"], 15, "線寬模型 w₀")
     out.append(f"每段延遲 t₀ = {t0:g} s、線寬模型 r∞ = {f['r∞'].iloc[0]:.3f}、w₀ = {f['w₀ (nm)'].iloc[0]:.0f} nm")
     return "；".join(out)
+
+
+def check_report(tmp):
+    """📦 錯誤回報：log 與環境資訊打包成 zip，金鑰路徑與 Google Sheet 網址要遮掉。"""
+    import zipfile
+    from .core import settings as S
+    from .core.report import make_report
+    logs = S.log_dir()
+    (logs / "error.log").write_text("Traceback 測試\n", encoding="utf-8")
+    (logs / "crash.log").write_text("crash 測試\n", encoding="utf-8")
+    cfg = S.load_settings()
+    cfg["etching"]["gsheet_key"] = "https://docs.google.com/spreadsheets/d/SECRET123/edit"
+    cfg["etching"]["service_account"] = r"D:\secret\sa.json"
+    S.save_settings(cfg)
+    fp = make_report(os.path.join(tmp, "report"), note="測試")
+    with zipfile.ZipFile(fp) as z:
+        names = z.namelist()
+        assert {"環境.txt", "logs/error.log", "logs/crash.log"} <= set(names), names
+        st = next(n for n in names if n.startswith("settings"))
+        text = z.read(st).decode("utf-8")
+        assert "SECRET123" not in text and "sa.json" not in text, "金鑰、試算表網址要遮掉"
+        assert "Magic Tool v" in z.read("環境.txt").decode("utf-8")
+    return f"{fp.name}（{len(names)} 個檔案，金鑰已遮掉）"
 
 
 def check_raman_tools(paths):
@@ -575,6 +622,11 @@ def run_gui(rep, timeout=90):
         import tkinter as tk
         root = tk.Tk()
     except Exception as e:
+        if getattr(rep, "require_gui", False):
+            rep.n += 1
+            rep.failed.append("軟體視窗（發佈前一定要實際開視窗測流暢度）")
+            rep.log(f"  ✗ 沒辦法開視窗測試（{e}）：發佈前一定要實際跑過介面與流暢度，請在有螢幕的電腦上執行")
+            return
         rep.log(f"  － 略過介面測試（這台電腦沒有可用的 Tk 顯示：{e}）")
         return
     root.withdraw()
@@ -886,6 +938,51 @@ def _gui_03(app, root, pump, ep):
         win.tree.selection_set("0")
         win.restore()
         assert pump(lambda: ep.data.df is not None and len(ep.data.df) == n0, 10), "還原刪除沒有作用"
+        # ---- OM 照片：精靈選圖 → 存檔 → 表格 📷 → 並排看
+        import numpy as np
+        from PIL import Image
+        pic = os.path.join(d, "om.png")
+        Image.fromarray((np.random.default_rng(3).random((300, 400, 3)) * 255).astype("uint8")).save(pic)
+        wz = ep.data.new_record()
+        for k, v in dict(material="hBN", steps="30", sio2_method="afm_step", sio2_step="3", mat_method="inside",
+                         mat_before="50", mat_step="20", name="om").items():
+            wz.vars[k].set(v)
+        wz.om_slots["before"].set(pic)
+        wz.om_slots["after"].set(pic)
+        assert wz.om_slots["before"]._img is not None, "OM 縮圖沒有出來"
+        assert pump(lambda: wz.result is not None, 5)
+        wz.save()
+        assert pump(lambda: ep.data.df is not None and len(ep.data.df) == n0 + 1, 10)
+        last = ep.data.df.iloc[-1]
+        assert str(last["OM before"]).endswith("_before.png") and str(last["OM after"]).endswith("_after.png"), last
+        ep.data.tree.selection_set([str(n0 + 1)])
+        root.update()
+        assert ep.data.tree.set(str(n0 + 1), "OM after") == "📷"
+        v = ep.data.show_om()
+        pump(lambda: False, 0.4)
+        assert v is not None and len(v._imgs) == 2, "OM 照片沒有顯示"
+        v.destroy()
+        # ---- 示意圖：光阻是貼著樣品的膜（多邊形，材料上方鼓起來）
+        wz = ep.data.new_record()
+        wz.select_stage(1)
+        root.update()
+        polys = [i for i in wz.canvas.find_all() if wz.canvas.type(i) == "polygon"]
+        assert polys, "光阻應該畫成貼著樣品的膜"
+        g = __import__("magic.gui.etch_schematic", fromlist=["Geometry"]).Geometry(
+            wz.canvas.winfo_width(), wz.canvas.winfo_height(), wz.canvas.vals)
+        xs, bottom, top = wz.canvas.resist_profile(g, wz.canvas.vals.get("T", 60.0), wz.canvas.vals.get("T_m", 50.0))
+        mid = (g.flake[0] + g.flake[1]) / 2
+        assert np.interp(mid, xs, top) < np.interp(g.sub[0] + 3, xs, top) - 5, "材料上方的光阻應該鼓起來"
+        assert np.all(bottom - top >= 0.79 * g.resist_px), "光阻任何地方都要有厚度"
+        wz.close()
+        # ---- ⚙ 設定 → 更新：📦 打包錯誤紀錄
+        from .gui.settings_dialog import SettingsDialog
+        messagebox.askyesno = lambda *a, **k: False
+        dlg = SettingsDialog(app)
+        fp = dlg.make_report()
+        assert fp is not None and os.path.exists(fp), "沒有產生錯誤回報 zip"
+        os.remove(fp)
+        dlg.destroy()
     finally:
         messagebox.askyesno, messagebox.showinfo, messagebox.showwarning = saved
 
@@ -927,7 +1024,8 @@ def _wanted(key, a, name):
     return True
 
 
-def main(gui=True, log=print):
+def main(gui=True, log=print, require_gui=False):
+    """require_gui：發佈前用。一定要實際開視窗、量流暢度（切換、背景計算、動畫）才算通過。"""
     from .core.settings import TOOL_ROOT
     from .testdata import write_all
     tmp = tempfile.mkdtemp(prefix="magic_selftest_")
@@ -935,7 +1033,8 @@ def main(gui=True, log=print):
     os.environ["MAGIC_DATA"] = os.path.join(tmp, "appdata")        # 設定與紀錄寫到暫存資料夾
     os.environ.setdefault("MPLBACKEND", "Agg")
     rep = Report(log)
-    log(f"Magic Tool 自我測試（{TOOL_ROOT}）")
+    rep.require_gui = require_gui
+    log(f"Magic Tool 自我測試（{TOOL_ROOT}）" + ("　［發佈前檢查：含實際開視窗與流暢度］" if require_gui else ""))
     try:
         from . import __version__
         log(f"版本 v{__version__}，Python {sys.version.split()[0]}")
@@ -948,6 +1047,7 @@ def main(gui=True, log=print):
             rep.check("蝕刻速率", lambda: check_etching(paths))
             rep.check("Raman 編修與峰標註", lambda: check_raman_tools(paths))
         rep.check("設定與工具", lambda: check_settings_and_tools(tmp))
+        rep.check("錯誤回報打包", lambda: check_report(tmp))
         rep.check("自動更新（本機模擬）", lambda: check_update(tmp))
         if gui:
             run_gui(rep)
@@ -965,4 +1065,4 @@ def main(gui=True, log=print):
 
 
 if __name__ == "__main__":
-    sys.exit(0 if main(gui="--no-gui" not in sys.argv) else 1)
+    sys.exit(0 if main(gui="--no-gui" not in sys.argv, require_gui="--release" in sys.argv) else 1)

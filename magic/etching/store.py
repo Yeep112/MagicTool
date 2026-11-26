@@ -41,7 +41,8 @@ EXTRA_03 = [                                   # v0.3 加的欄位（一樣加�
     "Resist after (nm)", "d_resist (nm)", "R_resist (nm/sec)", "σ R_resist (nm/sec)", "Selectivity (material/resist)",
     "SiO2 cross-check", "Material cross-check", "Record ID", "Revision", "Modified at",
 ]
-EXTRA = EXTRA + EXTRA_03
+EXTRA_04 = ["OM before", "OM after"]          # v0.4：蝕刻前、後的 OM 照片（相對於 CSV 的路徑）
+EXTRA = EXTRA + EXTRA_03 + EXTRA_04
 HEADERS = V1 + EXTRA
 HISTORY_HEADERS = ["Changed at", "Action", "Record ID", "Revision", "Row #", "Changed fields", "Old record (JSON)",
                    "New record (JSON)"]
@@ -75,7 +76,7 @@ def file_schema(path):
         if all(c in head for c in EXTRA):
             return "v2"
         if head == HEADERS[:len(head)] and "Schema" in head:
-            return "v2old"                      # 0.2 寫的 v2：只少了後面的新欄位，自動補上
+            return "v2old"                      # 舊版寫的 v2：只少了後面的新欄位，自動補上
         return "v1"
     return "other"
 
@@ -212,7 +213,7 @@ def upgrade_file(path):
     sch = file_schema(path)
     if sch not in ("v1", "v2old"):
         return None
-    tag = "v1備份" if sch == "v1" else "v0.2備份"
+    tag = "v1備份" if sch == "v1" else "升級前備份"
     backup = path.with_name(f"{path.stem}.{tag}_{time.strftime('%Y%m%d_%H%M%S')}{path.suffix}")
     shutil.copy2(path, backup)
     rows = []
@@ -247,7 +248,7 @@ def append_record(rec: dict, path):
     path.parent.mkdir(parents=True, exist_ok=True)
     sch = file_schema(path)
     if sch == "v2old":
-        upgrade_file(path)                      # 0.2 的格式只缺後面的欄位：自動備份、補上
+        upgrade_file(path)                      # 舊版的 v2 只缺後面的欄位：自動備份、補上
         sch = "v2"
     if sch == "v1":
         raise NeedsUpgrade("紀錄檔是舊格式（v1），要先升級才能寫入新欄位")
@@ -303,6 +304,45 @@ def export_xlsx(df, xlsx_path):
     out["Etched through"] = out["Etched through"].map(lambda v: "TRUE" if v else "")
     out.to_excel(xlsx_path, index=False)
     return Path(xlsx_path)
+
+
+# ---------------------------------------------------------------------------
+# OM 照片（複製到 <檔名>_images，CSV 只記相對路徑）
+# ---------------------------------------------------------------------------
+def images_dir(csv_path):
+    p = Path(csv_path)
+    return p.parent / f"{p.stem}_images"
+
+
+def attach_image(csv_path, rid, which, src):
+    """把照片複製到紀錄旁邊的 _images 資料夾 → 回傳相對路徑（已經在裡面就直接用）。"""
+    src = Path(src)
+    if not src.is_file():
+        raise FileNotFoundError(f"找不到照片：{src}")
+    d = images_dir(csv_path)
+    d.mkdir(parents=True, exist_ok=True)
+    dst = d / f"{rid}_{which}{src.suffix.lower()}"
+    try:
+        same = dst.exists() and src.resolve() == dst.resolve()
+    except OSError:
+        same = False
+    if not same:
+        for old in d.glob(f"{rid}_{which}.*"):           # 換照片：舊的那張改名留著（修改歷史還找得到）
+            if old.resolve() != src.resolve():
+                old.rename(old.with_name(f"{old.stem}_old_{time.strftime('%Y%m%d_%H%M%S')}{old.suffix}"))
+        shutil.copy2(src, dst)
+    return f"{d.name}/{dst.name}"
+
+
+def resolve_image(csv_path, rel):
+    """CSV 裡的相對路徑 → 絕對路徑（找不到回傳 None）。"""
+    rel = str(rel or "").strip()
+    if not rel:
+        return None
+    p = Path(rel)
+    if not p.is_absolute():
+        p = Path(csv_path).parent / rel
+    return p if p.is_file() else None
 
 
 # ---------------------------------------------------------------------------
