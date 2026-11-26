@@ -12,9 +12,12 @@ from .hover import Hover
 from .widgets import Chip, Paned
 
 SIZE_MODES = ["填滿視窗", "固定大小"]
-FONT_SIZES = {"小": dict(xlabel=10, ylabel=10, ticks=9, legend=7, title=10),
-              "中": dict(xlabel=12, ylabel=12, ticks=10, legend=8, title=11),
-              "大": dict(xlabel=14, ylabel=14, ticks=12, legend=10, title=13)}
+FONT_SIZES = {"小": dict(xlabel=10, ylabel=10, cbar=10, ticks=9, legend=7, title=10),
+              "中": dict(xlabel=12, ylabel=12, cbar=12, ticks=10, legend=8, title=11),
+              "大": dict(xlabel=14, ylabel=14, cbar=14, ticks=12, legend=10, title=13),
+              "特大": dict(xlabel=18, ylabel=18, cbar=16, ticks=15, legend=13, title=16)}
+STYLE_FIELDS = [("xlabel", "X 標籤"), ("ylabel", "Y 標籤"), ("cbar", "色條"), ("ticks", "刻度"),
+                ("legend", "圖例"), ("title", "標題")]
 PANEL_MIN = (380, 300)            # 每個子圖的最小大小（100% 介面），不夠放就出現捲軸
 
 
@@ -180,6 +183,11 @@ class FigurePanel(tk.Frame):
         self.toolbar.pack(side="top", fill="x")
         host.pack(side="top", fill="both", expand=True)
         self.hover = Hover(self.canvas)
+        from .fig_tools import FigTools
+        self.picking = False                  # 其他工具正在等使用者點圖（例如新增峰標註）時，不拖曳圖例
+        self.tools = FigTools(self)
+        self.redraw_request = self.restyle    # 頁面會換成「用上次的結果重畫」
+        self._home = {}
 
         th = tk.Frame(txtf, bg=T.CARD)
         th.pack(fill="x", pady=(6, 2))
@@ -205,30 +213,68 @@ class FigurePanel(tk.Frame):
     def _build_style_bar(self):
         bar = tk.Frame(self, bg=T.SUBTLE, highlightthickness=1, highlightbackground=T.BORDER)
         bar.pack(fill="x", pady=(8, 0))
-        tk.Label(bar, text="圖", bg=T.SUBTLE, fg=T.MUTED, font=T.font(9, "bold")).pack(side="left", padx=(8, 6))
+        r1 = tk.Frame(bar, bg=T.SUBTLE)
+        r1.pack(fill="x")
+        r2 = tk.Frame(bar, bg=T.SUBTLE)
+        r2.pack(fill="x")
+
+        def lab(parent, text, bold=False, padx=(8, 2)):
+            tk.Label(parent, text=text, bg=T.SUBTLE, fg=T.MUTED, font=T.font(9, "bold" if bold else "normal")).pack(
+                side="left", padx=padx)
+        # 第一列：大小
+        lab(r1, "圖的大小", True, (8, 6))
         self.size_var = tk.StringVar(value=self.view.get("size_mode", SIZE_MODES[0]))
-        cb = ttk.Combobox(bar, textvariable=self.size_var, values=SIZE_MODES, state="readonly", width=9)
-        cb.pack(side="left", pady=4)
+        cb = ttk.Combobox(r1, textvariable=self.size_var, values=SIZE_MODES, state="readonly", width=9)
+        cb.pack(side="left", pady=3)
         self.w_var = tk.StringVar(value=str(self.view.get("fig_w", 1100)))
         self.h_var = tk.StringVar(value=str(self.view.get("fig_h", 650)))
-        tk.Label(bar, text="寬", bg=T.SUBTLE, fg=T.MUTED, font=T.font(9)).pack(side="left", padx=(8, 2))
-        ew = ttk.Entry(bar, textvariable=self.w_var, width=6)
+        lab(r1, "寬")
+        ew = ttk.Entry(r1, textvariable=self.w_var, width=6)
         ew.pack(side="left")
-        tk.Label(bar, text="高", bg=T.SUBTLE, fg=T.MUTED, font=T.font(9)).pack(side="left", padx=(6, 2))
-        eh = ttk.Entry(bar, textvariable=self.h_var, width=6)
+        lab(r1, "高", padx=(6, 2))
+        eh = ttk.Entry(r1, textvariable=self.h_var, width=6)
         eh.pack(side="left")
-        tk.Label(bar, text="px", bg=T.SUBTLE, fg=T.FAINT, font=T.font(9)).pack(side="left", padx=(2, 10))
+        tk.Label(r1, text="px", bg=T.SUBTLE, fg=T.FAINT, font=T.font(9)).pack(side="left", padx=(2, 10))
+        ttk.Button(r1, text="↺ 圖例", style=f"{self.key}.Small.TButton", command=self.reset_legends).pack(
+            side="right", padx=(2, 6), pady=2)
+        ttk.Button(r1, text="✎ 標題與軸標籤", style=f"{self.key}.Small.TButton", command=self.edit_labels).pack(
+            side="right", padx=2, pady=2)
+        # 第二列：樣式（格線、各種字體大小）
+        lab(r2, "圖表樣式", True, (8, 6))
         self.grid_var = tk.BooleanVar(value=bool(self.view.get("grid", True)))
-        ttk.Checkbutton(bar, text="格線", variable=self.grid_var, style=f"{self.key}.TCheckbutton").pack(side="left")
-        tk.Label(bar, text="字體", bg=T.SUBTLE, fg=T.MUTED, font=T.font(9)).pack(side="left", padx=(10, 2))
+        ttk.Checkbutton(r2, text="格線", variable=self.grid_var, style=f"{self.key}.TCheckbutton").pack(side="left")
+        self.size_vars = {}
+        base = FONT_SIZES["中"]
+        for k, text in STYLE_FIELDS:
+            lab(r2, text, padx=(8, 2))
+            var = tk.StringVar(value=str(self.view.get(k, base[k])))
+            sp = ttk.Spinbox(r2, from_=5, to=48, increment=1, textvariable=var, width=3,
+                             command=self._style_changed)
+            sp.pack(side="left", pady=3)
+            sp.bind("<Return>", lambda e: self._style_changed())
+            sp.bind("<FocusOut>", lambda e: self._style_changed())
+            self.size_vars[k] = var
+        lab(r1, "字體一鍵設定", padx=(4, 2))
         self.font_var = tk.StringVar(value=self.view.get("font", "中"))
-        fc = ttk.Combobox(bar, textvariable=self.font_var, values=list(FONT_SIZES), state="readonly", width=3)
+        fc = ttk.Combobox(r1, textvariable=self.font_var, values=list(FONT_SIZES), state="readonly", width=4)
         fc.pack(side="left", padx=(0, 8))
-        for v in (self.size_var, self.grid_var, self.font_var):
+        fc.bind("<<ComboboxSelected>>", lambda e: self._preset())
+        for v in (self.size_var, self.grid_var):
             v.trace_add("write", lambda *a: self._style_changed())
         for e in (ew, eh):
             e.bind("<Return>", lambda ev: self._style_changed())
             e.bind("<FocusOut>", lambda ev: self._style_changed())
+
+    def _preset(self):
+        """「一鍵」小 / 中 / 大 / 特大：一次設定所有字體大小。"""
+        pre = FONT_SIZES.get(self.font_var.get(), FONT_SIZES["中"])
+        self._syncing = True
+        try:
+            for k, var in self.size_vars.items():
+                var.set(str(pre[k]))
+        finally:
+            self._syncing = False
+        self._style_changed()
 
     def _style_changed(self):
         if getattr(self, "_syncing", False):
@@ -238,8 +284,17 @@ class FigurePanel(tk.Frame):
             h = max(200, min(6000, int(float(self.h_var.get()))))
         except ValueError:
             w, h = self.view.get("fig_w", 1100), self.view.get("fig_h", 650)
-        self.view.update(size_mode=self.size_var.get(), fig_w=w, fig_h=h, grid=bool(self.grid_var.get()),
-                         font=self.font_var.get())
+        sizes = {}
+        for k, var in self.size_vars.items():
+            try:
+                sizes[k] = max(4.0, min(60.0, float(var.get())))
+            except ValueError:
+                sizes[k] = self.view.get(k, FONT_SIZES["中"][k])
+        new = dict(size_mode=self.size_var.get(), fig_w=w, fig_h=h, grid=bool(self.grid_var.get()),
+                   font=self.font_var.get(), **sizes)
+        if all(self.view.get(k) == v for k, v in new.items()):
+            return
+        self.view.update(new)
         self.on_view_change()
 
     def sync_view(self):
@@ -253,11 +308,26 @@ class FigurePanel(tk.Frame):
                     var.set(self.view.get(key))
             if bool(self.grid_var.get()) != bool(self.view.get("grid", True)):
                 self.grid_var.set(bool(self.view.get("grid", True)))
+            for k, var in self.size_vars.items():
+                v = self.view.get(k, FONT_SIZES["中"][k])
+                txt = f"{v:g}" if isinstance(v, (int, float)) else str(v)
+                if var.get() != txt:
+                    var.set(txt)
         finally:
             self._syncing = False
 
     def style_dict(self):
-        return {**FONT_SIZES.get(self.view.get("font", "中"), FONT_SIZES["中"]), "grid": self.view.get("grid", True)}
+        base = FONT_SIZES.get(self.view.get("font", "中"), FONT_SIZES["中"])
+        return {**base, **{k: self.view[k] for k in base if k in self.view}, "grid": self.view.get("grid", True)}
+
+    def edit_labels(self):
+        self.tools.edit_labels(self.winfo_toplevel(), self.key, self.restyle)
+
+    def reset_legends(self):
+        n = self.tools.hidden_count()
+        self.tools.reset()
+        self.tools.status("圖例回到原位" + (f"、{n} 條隱藏的資料重新顯示" if n else "") + "（文字標註也回到原位）", "ok")
+        self.redraw_request()
 
     # ------------------------------------------------------------------ 版面
     def fixed(self):
@@ -341,6 +411,10 @@ class FigurePanel(tk.Frame):
         """畫完後：套樣式、排版、重畫（draw_idle：合併成一次，不會卡住）。"""
         from ..core.plotstyle import apply_style
         apply_style(self.fig, self.style_dict())
+        try:
+            self.tools.apply()
+        except Exception:
+            pass
         self.canvas.relayout()
         self._home = {ax: (ax.get_xlim(), ax.get_ylim()) for ax in self.fig.axes}
         self.compute_need()

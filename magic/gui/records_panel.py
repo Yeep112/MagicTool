@@ -47,9 +47,18 @@ class RecordsPanel(tk.Frame):
         cb = ttk.Combobox(bar, textvariable=self.source_var, values=SOURCES, state="readonly", width=10)
         cb.pack(side="left", padx=(6, 0))
         cb.bind("<<ComboboxSelected>>", lambda e: self.reload())
-        ttk.Button(bar, text="匯出 Excel", style=f"{key}.Small.TButton", command=self.export_xlsx).pack(side="right")
-        ttk.Button(bar, text="複製條件", style=f"{key}.Small.TButton", command=self.new_from_selected).pack(
-            side="right", padx=(0, 6))
+        bar2 = tk.Frame(self, bg=T.CARD)
+        bar2.pack(fill="x", pady=(0, 4))
+        for text, cmd, tip in (("✎ 修改", self.edit_selected, "修改選取的那一筆（也可以在表格上雙擊）；修改前的值會留在修改歷史"),
+                               ("🗑 刪除", self.delete_selected, "刪除選取的紀錄；刪掉的紀錄會留在修改歷史，可以還原"),
+                               ("🕘 修改歷史", self.show_history, "看修改、刪除過哪些紀錄，可以還原"),
+                               ("複製條件", self.new_from_selected, "用選取那一筆的條件開新紀錄（量測值留空）"),
+                               ("匯出 Excel", self.export_xlsx, "")):
+            b = ttk.Button(bar2, text=text, style=f"{key}.Small.TButton", command=cmd)
+            b.pack(side="left", padx=(0, 4))
+            if tip:
+                from .params_panel import Tooltip
+                Tooltip(b, tip)
 
         self.path_lab = tk.Label(self, text="", bg=T.CHIP, fg=T.MUTED, font=T.font(9), anchor="w", padx=8, pady=3)
         self.path_lab.pack(fill="x", pady=(0, 4))
@@ -87,6 +96,8 @@ class RecordsPanel(tk.Frame):
         self.tree.bind("<<TreeviewSelect>>", lambda e: self.page.on_selection())
         self.tree.bind("<Control-a>", lambda e: (self.tree.selection_set(self.tree.get_children()), "break")[1])
         self.tree.bind("<Escape>", lambda e: self.tree.selection_remove(self.tree.selection()))
+        self.tree.bind("<Double-1>", lambda e: self.edit_selected() if self.tree.identify_row(e.y) else None)
+        self.tree.bind("<Delete>", lambda e: self.delete_selected())
 
     # ------------------------------------------------------------------ 讀取
     def csv_path(self):
@@ -103,7 +114,7 @@ class RecordsPanel(tk.Frame):
             return str(self.demo_path())
         return str(self.csv_path())
 
-    def reload(self, select_last=False):
+    def reload(self, select_last=False, select_id=None):
         self._gen += 1
         gen = self._gen
         src = self.source_var.get()
@@ -131,9 +142,9 @@ class RecordsPanel(tk.Frame):
                     df = store.read_log(demo)
                 else:
                     df = store.read_log(self.csv_path())
-                self.app.post(("records", (self, gen, df, None, select_last)))
+                self.app.post(("records", (self, gen, df, None, select_id or select_last)))
             except Exception as e:
-                self.app.post(("records", (self, gen, None, str(e), select_last)))
+                self.app.post(("records", (self, gen, None, str(e), select_id or select_last)))
         self.app.submit(work)
 
     def on_records(self, gen, df, error, select_last):
@@ -148,14 +159,21 @@ class RecordsPanel(tk.Frame):
         self.df = df
         self._update_banner()
         self.populate()
-        if select_last and len(df):
+        if isinstance(select_last, str) and len(df):            # 選 Record ID 那一筆
+            hit = df[df["Record ID"].astype(str) == select_last]
+            if len(hit):
+                iid = str(int(hit["#"].iloc[0]))
+                if self.tree.exists(iid):
+                    self.tree.selection_set([iid])
+                    self.tree.see(iid)
+        elif select_last and len(df):
             last = str(int(df["#"].iloc[-1]))
             if self.tree.exists(last):
                 self.tree.selection_set([last])
                 self.tree.see(last)
 
     def _update_banner(self):
-        v1 = self.source_var.get() == SOURCES[0] and store.file_schema(self.csv_path()) == "v1"
+        v1 = self.source_var.get() == SOURCES[0] and store.file_schema(self.csv_path()) == "v1"   # 0.2 的格式會自動補欄位
         if v1:
             self.banner_lab.configure(text="這份紀錄是舊格式（20 欄）。可以照常檢視；寫入新紀錄前會先備份、"
                                            "再把新欄位加在最後面（舊欄位與 Google Sheet 對應不變）。")
@@ -259,3 +277,160 @@ class RecordsPanel(tk.Frame):
             self.app.status(f"已匯出 {len(df)} 筆到 {fp}", "ok")
         except Exception as e:
             messagebox.showerror("匯出 Excel", f"匯出失敗：{e}", parent=self)
+
+    # ------------------------------------------------------------------ 修改 / 刪除 / 歷史
+    def _local_rows(self, action):
+        """選取的列（只能改本機 CSV）。回傳 [(編號, 那一筆 dict)]，或 None。"""
+        if self.source_var.get() != SOURCES[0]:
+            messagebox.showinfo(action, "只能修改「本機 CSV」的紀錄（Google Sheet 會跟著同步；範例資料是唯讀的）。\n"
+                                        "請把上面的來源切回「本機 CSV」。", parent=self)
+            return None
+        sel = [int(i) for i in self.tree.selection()]
+        if not sel or self.df is None:
+            messagebox.showinfo(action, "先在表格選紀錄", parent=self)
+            return None
+        path = self.csv_path()
+        sch = store.file_schema(path)
+        if sch == "v1":
+            if not messagebox.askyesno(action, "這份紀錄是舊格式（20 欄）。要先備份、再升級成新格式才能修改。\n要繼續嗎？",
+                                       parent=self):
+                return None
+            store.upgrade_file(path)
+        elif sch == "v2old":
+            store.upgrade_file(path)
+        if store.ensure_ids(path) or sch in ("v1", "v2old"):
+            fresh = store.read_log(path)                       # 剛補上 Record ID：重新讀一次
+        else:
+            fresh = self.df
+        out = []
+        for n in sel:
+            hit = fresh[fresh["#"] == n]
+            if len(hit):
+                out.append((n, hit.iloc[0].to_dict()))
+        return out
+
+    def edit_selected(self):
+        rows = self._local_rows("修改紀錄")
+        if not rows:
+            return None
+        if len(rows) > 1:
+            self.app.status("一次修改一筆：先改第一筆選取的紀錄", "warn")
+        n, row = rows[0]
+        from .etch_wizard import EtchWizard
+        return EtchWizard(self, edit={"rid": row["Record ID"], "row": row, "n": n})
+
+    def delete_selected(self, confirm=True):
+        rows = self._local_rows("刪除紀錄")
+        if not rows:
+            return 0
+        desc = "\n".join(f"#{n}　{r.get('DateTime', '')}　{r.get('Material', '')}　"
+                         f"r = {r.get('R_hBN(nm/sec)', float('nan')):.4g} nm/s" for n, r in rows[:8])
+        more = f"\n…等 {len(rows)} 筆" if len(rows) > 8 else ""
+        if confirm and not messagebox.askyesno(
+                "刪除紀錄", f"刪除這 {len(rows)} 筆紀錄？\n\n{desc}{more}\n\n刪掉的紀錄會留在「🕘 修改歷史」，可以還原。",
+                parent=self):
+            return 0
+        path = self.csv_path()
+        gone = []
+        for n, r in rows:
+            try:
+                gone.append(store.delete_record(path, r["Record ID"]))
+            except (store.RecordNotFound, OSError) as e:
+                messagebox.showerror("刪除紀錄", f"#{n}：{e}", parent=self)
+        et = self.app.settings.get("etching", {})
+        if gone and et.get("xlsx_mirror"):
+            try:
+                store.export_xlsx(store.read_log(path), os.path.splitext(str(path))[0] + ".xlsx")
+            except Exception:
+                pass
+        if gone and et.get("gsheet_enabled"):
+            settings = self.app.settings
+
+            def work():
+                bad = 0
+                for old in gone:
+                    try:
+                        store.gsheet_delete(old.get("Record ID", ""), old, et.get("gsheet_key", ""),
+                                            S.service_account_path(settings), et.get("gsheet_worksheet", ""))
+                    except Exception:
+                        bad += 1
+                self.app.post(("status", ("Google Sheet 也已刪除" if not bad else
+                                          f"Google Sheet 有 {bad} 筆找不到，請手動刪除（本機 CSV 已刪除）",
+                                          "ok" if not bad else "warn")))
+            self.app.submit(work)
+        self.app.status(f"已刪除 {len(gone)} 筆（可以在「🕘 修改歷史」還原）", "ok")
+        self.reload()
+        return len(gone)
+
+    def show_history(self):
+        path = self.csv_path()
+        win = tk.Toplevel(self)
+        win.title("修改歷史")
+        win.configure(bg=T.CARD)
+        win.transient(self.winfo_toplevel())
+        win.geometry(f"{T.px(860)}x{T.px(460)}")
+        tk.Label(win, text=f"修改、刪除過的紀錄（最新的在上面）：{store.history_path(path).name}", bg=T.CARD, fg=T.MUTED,
+                 font=T.font(9), anchor="w").pack(fill="x", padx=12, pady=(10, 4))
+        f = tk.Frame(win, bg=T.CARD)
+        f.pack(fill="both", expand=True, padx=12)
+        cols = [("Changed at", "時間", 140), ("Action", "動作", 70), ("Row #", "#", 40), ("Changed fields", "改了什麼", 560)]
+        tree = ttk.Treeview(f, columns=[c for c, _, _ in cols], show="headings", selectmode="browse")
+        for c, t, w in cols:
+            tree.heading(c, text=t)
+            tree.column(c, width=T.px(w), stretch=c == "Changed fields", anchor="w")
+        sb = ttk.Scrollbar(f, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=sb.set)
+        tree.pack(side="left", fill="both", expand=True)
+        sb.pack(side="right", fill="y")
+        hist = store.read_history(path)
+        entries = hist.to_dict("records")[::-1]
+        for i, e in enumerate(entries):
+            what = e.get("Changed fields") or ("整筆紀錄" if e.get("Action") in ("刪除", "還原刪除") else "")
+            tree.insert("", "end", iid=str(i), values=(e.get("Changed at"), e.get("Action"), e.get("Row #"), what))
+        if not entries:
+            tree.insert("", "end", values=("", "", "", "還沒有修改或刪除過紀錄"))
+        bf = tk.Frame(win, bg=T.CARD)
+        bf.pack(fill="x", padx=12, pady=10)
+
+        def restore():
+            sel = tree.selection()
+            if not sel or not entries:
+                return
+            e = entries[int(sel[0])]
+            if e.get("Action") not in ("修改", "刪除", "還原"):
+                messagebox.showinfo("還原", "這一筆是還原的紀錄，不需要再還原", parent=win)
+                return
+            msg = ("把這筆紀錄改回修改前的值？" if e["Action"] != "刪除" else "把刪除的紀錄放回原來的位置？") + \
+                "\n（目前的值也會留在修改歷史）"
+            if not messagebox.askyesno("還原", msg, parent=win):
+                return
+            try:
+                back = store.restore_history(path, e)
+            except (store.RecordNotFound, OSError, ValueError) as err:
+                messagebox.showerror("還原", str(err), parent=win)
+                return
+            et = self.app.settings.get("etching", {})
+            if et.get("gsheet_enabled"):
+                settings = self.app.settings
+
+                def work():
+                    try:
+                        if e["Action"] == "刪除":
+                            store.gsheet_append(back, et.get("gsheet_key", ""), S.service_account_path(settings),
+                                                et.get("gsheet_worksheet", ""))
+                        else:
+                            store.gsheet_update(e["Record ID"], back, None, et.get("gsheet_key", ""),
+                                                S.service_account_path(settings), et.get("gsheet_worksheet", ""))
+                        self.app.post(("status", ("Google Sheet 也已還原", "ok")))
+                    except Exception as err:
+                        self.app.post(("status", (f"Google Sheet 還原失敗，請手動修改（本機 CSV 已還原）：{err}", "warn")))
+                self.app.submit(work)
+            self.app.status("已還原", "ok")
+            win.destroy()
+            self.reload(select_id=e["Record ID"])
+        ttk.Button(bf, text="還原這一筆", style=f"{self.key}.Accent.TButton", command=restore).pack(side="right")
+        ttk.Button(bf, text="關閉", style=f"{self.key}.Ghost.TButton", command=win.destroy).pack(side="right", padx=6)
+        win.restore = restore
+        win.tree = tree
+        win.entries = entries
+        return win

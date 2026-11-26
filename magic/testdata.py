@@ -236,3 +236,34 @@ def write_all(folder):
         "etching_v1": etching_csv(j(folder, "Etching", "etch_rate_log_v1_old.csv")),
     }
     return out
+
+
+def afm_profile(path, h=37.5, kind="gwyddion", n_profiles=2, trench=False, tilt=0.004, noise=0.25, seed=21):
+    """AFM line profile 文字檔（合成）。kind：gwyddion（公尺、x z 成對並排）或 nanoscope（µm、nm，兩欄）。
+    trench = 掃過一條溝槽（高 → 低 → 高）；否則是一個台階（低 → 高）。"""
+    rng = np.random.default_rng(seed)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    cols = []
+    for k in range(n_profiles):
+        x = np.linspace(0, 6000, 400)                                  # nm
+        if trench:
+            up = ((x < 2000) | (x > 4000)).astype(float)
+            edge = np.minimum(np.abs(x - 2000), np.abs(x - 4000))
+        else:
+            up = (x > 3000).astype(float)
+            edge = np.abs(x - 3000)
+        zz = 20 + h * up + tilt * x + rng.normal(0, noise, x.size)
+        zz[edge < 60] += rng.normal(0, 3, (edge < 60).sum())            # 邊緣的斜坡、殘膠
+        cols.append((x, zz + 0.3 * k))
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        if kind == "gwyddion":
+            f.write("Profiles\n")
+            f.write("  ".join("x [m]  y [m]" for _ in cols) + "\n")
+            for i in range(len(cols[0][0])):
+                f.write("  ".join(f"{x[i] * 1e-9:.6e}  {z[i] * 1e-9:.6e}" for x, z in cols) + "\n")
+        else:
+            f.write("Section Analysis\nDistance (um)\tHeight (nm)\n")
+            x, z = cols[0]
+            for i in range(len(x)):
+                f.write(f"{x[i] / 1000:.5f}\t{z[i]:.4f}\n")
+    return path

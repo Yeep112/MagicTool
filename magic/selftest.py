@@ -279,14 +279,17 @@ def check_etching(paths):
             return self.rows
 
         def update(self, range_name="A1", values=None, **kw):
-            assert range_name == "A1"
-            if self.rows:
-                self.rows[0] = list(values[0])
+            i = int(range_name[1:]) - 1
+            if i < len(self.rows):
+                self.rows[i] = [str(v) for v in values[0]]
             else:
-                self.rows.append(list(values[0]))
+                self.rows.append([str(v) for v in values[0]])
 
         def append_row(self, row, **kw):
-            self.rows.append(list(row))
+            self.rows.append([str(v) for v in row])
+
+        def delete_rows(self, i):
+            self.rows.pop(i - 1)
 
     ws = FakeWS([])
     assert store.ensure_sheet_header(ws) == "new" and ws.rows[0] == store.HEADERS
@@ -304,7 +307,208 @@ def check_etching(paths):
     except store.SheetError:
         pass
     out.append("Google Sheet 表頭（模擬）")
+    out.append(_check_etching_03(paths, FakeWS))
     return "；".join(out)
+
+
+def _check_etching_03(paths, FakeWS):
+    """v0.3：交叉檢查、光阻蝕刻率、修改 / 刪除 / 歷史、0.2 格式自動升級、Google Sheet 同步、AFM profile、
+    每段延遲模型、線寬模型擬合。"""
+    import csv as _csv
+    import numpy as np
+    import pandas as pd
+    from .etching import store
+    from .etching.afm import read_profiles, step_height
+    from .etching.model import EtchInput, compute
+    from .testdata import TRUTH, afm_profile
+    from .runner import run
+    out = []
+    base = dict(material="hBN", steps="20+20", sio2_method="marker", marker_before="50", marker_out="55",
+                mat_method="outside", mat_before="100", mat_out="40")
+    # --- 交叉檢查 ---
+    r = compute(EtchInput(**base, cross_check=True, sio2_step="5.3, 5.1", mat_step="64.5, 65.5"))
+    assert len(r.sio2_cross) == 1 and r.sio2_cross[0][5] and len(r.mat_cross) == 1 and r.mat_cross[0][5], \
+        (r.sio2_cross, r.mat_cross)
+    _near(r.sio2_cross[0][1], 5.2, 1e-9, "交叉檢查 d_SiO2（AFM）")
+    assert not r.warnings, r.warnings
+    r = compute(EtchInput(**base, cross_check=True, sio2_step="8"))
+    assert r.sio2_cross and not r.sio2_cross[0][5] and any("兩種量法" in w for w in r.warnings), "差太多要提醒"
+    r = compute(EtchInput(**base, sio2_step="8"))
+    assert not r.sio2_cross, "沒勾交叉檢查就不比對"
+    # --- 光阻蝕刻率 ---
+    r = compute(EtchInput(**base, resist_thickness="300", resist_after="280, 282"))
+    _near(r.r_resist, 19 / 40, 1e-9, "r_光阻")
+    _near(r.sel_resist, (65 / 40) / (19 / 40), 1e-9, "材料 / 光阻選擇比")
+    _near(r.resist_life, 300 / (19 / 40), 1e-6, "光阻可以撐的時間")
+    r = compute(EtchInput(**base, resist_thickness="300", resist_after="20"))
+    assert any("光阻只剩" in w for w in r.warnings) and any("光阻不夠厚" in w for w in r.warnings), r.warnings
+    r = compute(EtchInput(**base, resist_thickness="300", resist_after="0.2"))
+    assert r.resist_through and any("光阻已經被蝕刻完" in w for w in r.warnings)
+    out.append("交叉檢查、光阻蝕刻率")
+    # --- 修改 / 刪除 / 歷史 / 還原 ---
+    folder = os.path.join(os.path.dirname(paths["etching"]), "edit_test")
+    os.makedirs(folder, exist_ok=True)
+    path = os.path.join(folder, "log.csv")
+    recs = []
+    for k, mo in enumerate(("40", "41", "42")):
+        inp = EtchInput(**{**base, "mat_out": mo, "name": f"P{k}"})
+        recs.append(store.append_record(store.make_record(inp, compute(inp)), path))
+    df = store.read_log(path)
+    ids = list(df["Record ID"])
+    assert len(set(ids)) == 3 and all(ids), "每筆都要有 Record ID"
+    row = df.iloc[1].to_dict()
+    back = store.record_to_inputs(row)
+    assert back["mat_out"] == "41" and back["sio2_method"] == "marker", back
+    inp = EtchInput(**{**back, "mat_out": "45"})
+    old, new = store.replace_record(path, ids[1], store.make_record(inp, compute(inp)))
+    df2 = store.read_log(path)
+    assert len(df2) == 3 and list(df2["Record ID"]) == ids, "修改不能改變順序和 ID"
+    assert df2["Revision"].iloc[1] == "2" and df2["DateTime"].iloc[1] == df["DateTime"].iloc[1]
+    _near(df2["H_hBN_after (nm)"].iloc[1], 45, 1e-9, "修改後的值")
+    hist = store.read_history(path)
+    assert len(hist) == 1 and hist["Action"].iloc[0] == "修改" and "H_hBN_after" in hist["Changed fields"].iloc[0]
+    store.delete_record(path, ids[0])
+    assert list(store.read_log(path)["Record ID"]) == ids[1:]
+    hist = store.read_history(path).to_dict("records")
+    store.restore_history(path, hist[-1])                       # 還原刪除 → 回到第 1 筆
+    assert list(store.read_log(path)["Record ID"]) == ids, "還原刪除要放回原來的位置"
+    store.restore_history(path, hist[0])                        # 還原修改 → 41
+    df3 = store.read_log(path)
+    _near(df3["H_hBN_after (nm)"].iloc[1], 41, 1e-9, "還原修改")
+    assert df3["Revision"].iloc[1] == "3"
+    try:
+        store.replace_record(path, "不存在", recs[0])
+        raise AssertionError("找不到的 ID 要停下來")
+    except store.RecordNotFound:
+        pass
+    out.append("修改 / 刪除 / 歷史還原")
+    # --- 0.2 寫的檔案（少了後面的欄位）→ 自動備份、補欄位 ---
+    old_head = store.HEADERS[:len(store.HEADERS) - len(store.EXTRA_03)]
+    p02 = os.path.join(folder, "v02.csv")
+    with open(p02, "w", encoding="utf-8-sig", newline="") as f:
+        w = _csv.writer(f)
+        w.writerow(old_head)
+        w.writerow([store._cell(recs[0].get(c, "")) for c in old_head])
+    assert store.file_schema(p02) == "v2old"
+    store.append_record(recs[1], p02)
+    assert store.file_schema(p02) == "v2" and len(store.read_log(p02)) == 2
+    assert any("v0.2備份" in n for n in os.listdir(folder)), "0.2 的檔案升級前要備份"
+    assert all(store.read_log(p02)["Record ID"]), "升級時要補上 Record ID"
+    # --- Google Sheet：修改、刪除對到正確的列 ---
+    ws = FakeWS([store.HEADERS] + [[str(store._cell(r.get(c, ""))) for c in store.HEADERS] for r in recs])
+    new_rec = dict(recs[2], **{"Notes": "改過"})
+    i = store.gsheet_update(recs[2]["Record ID"], new_rec, recs[2], "k", "sa", ws=ws)
+    assert i == 4 and ws.rows[3][store.HEADERS.index("Notes")] == "改過", "Google Sheet 要改對的那一列"
+    store.gsheet_delete(recs[0]["Record ID"], recs[0], "k", "sa", ws=ws)
+    assert len(ws.rows) == 3 and ws.rows[1][store.HEADERS.index("Record ID")] == recs[1]["Record ID"]
+    try:
+        store.gsheet_update("沒有這個", new_rec, None, "k", "sa", ws=ws)
+        raise AssertionError("Google Sheet 找不到時要停下來，不能改錯列")
+    except store.SheetError:
+        pass
+    out.append("0.2 格式自動升級、Google Sheet 修改 / 刪除（模擬）")
+    # --- AFM profile ---
+    for kind, trench in (("gwyddion", False), ("gwyddion", True), ("nanoscope", False)):
+        fp = afm_profile(os.path.join(folder, f"afm_{kind}_{trench}.txt"), h=37.5, kind=kind, trench=trench)
+        profs = read_profiles(fp)
+        assert len(profs) == (2 if kind == "gwyddion" else 1), len(profs)
+        for k, pr in enumerate(profs):
+            _near(pr.x.max(), 6000, 1.0, f"AFM x 單位換算（{kind}）")
+            r = step_height(pr.x, pr.z)
+            assert r["ok"] and not r["reason"], r["reason"]
+            _near(r["h"], 37.5, 0.3, f"AFM 台階（{kind}{'，溝槽' if trench else ''}）")
+            assert len(r["edges"]) == (2 if trench else 1), r["edges"]
+    pr = read_profiles(os.path.join(folder, "afm_nanoscope_False.txt"))[0]
+    r = step_height(pr.x, pr.z, low_range=(300, 2600), high_range=(3400, 5800))
+    _near(r["h"], 37.5, 0.3, "AFM 手動範圍")
+    flat = step_height(pr.x, 20 + np.random.default_rng(1).normal(0, 0.3, pr.x.size))
+    assert not flat["ok"] or flat["reason"], "平的 profile 不應該找到可靠的台階"
+    out.append("AFM profile 找台階")
+    # --- 每段延遲模型：d = r·(t − N·t0) ---
+    rr, t0 = 1.0, 3.0
+    rows = []
+    for steps, t, n in (("20", 20, 1), ("40", 40, 1), ("2x20", 40, 2), ("3x20", 60, 3), ("60", 60, 1)):
+        inp = EtchInput(material="hBN", line_width="1000", steps=steps, sio2_method="none", mat_method="inside",
+                        mat_before="200", mat_step=f"{rr * (t - n * t0):.4f}")
+        rows.append(store.make_record(inp, compute(inp)))
+    df = store.normalize(pd.DataFrame(rows))
+    _, res = run("Etching", "多時間線性擬合", [df], model="每段都有延遲（d = r·(t − N·t₀)）")
+    t = res.tables["time_fit"]
+    _near(t["蝕刻率 (nm/s)"].iloc[0], rr, 1e-6, "每段延遲模型的蝕刻率")
+    _near(t["每段延遲 t₀ (s)"].iloc[0], t0, 1e-6, "每段延遲 t₀")
+    _, res = run("Etching", "多時間線性擬合", [df])
+    assert abs(res.tables["time_fit"]["蝕刻率 (nm/s)"].iloc[0] - rr) > 0.01, "整段延遲模型應該擬合不好（對照）"
+    # --- 線寬模型 r(w) = r∞(1 − e^(−w/w0)) ---
+    _, res = run("Etching", "線寬比較", [paths["etching"]], source="多時間擬合的斜率（扣掉起始延遲）")
+    f = res.tables["linewidth_fit"]
+    _near(f["r∞"].iloc[0], TRUTH["etch_r_inf"], 0.04, "線寬模型 r∞")
+    _near(f["w₀ (nm)"].iloc[0], TRUTH["etch_w0"], 15, "線寬模型 w₀")
+    out.append(f"每段延遲 t₀ = {t0:g} s、線寬模型 r∞ = {f['r∞'].iloc[0]:.3f}、w₀ = {f['w₀ (nm)'].iloc[0]:.0f} nm")
+    return "；".join(out)
+
+
+def check_raman_tools(paths):
+    """Raman 編修（橡皮擦、手動背景）與峰標註。"""
+    import numpy as np
+    from matplotlib.figure import Figure
+    from .raman import edits as E
+    from .raman import labels as L
+    from .readers import load
+    from .readers.raman_txt import xy
+    from .runner import run
+    from .testdata import TRUTH
+    p = paths["raman_mono"]
+    ds = load(p)
+    x, y = xy(ds)
+    # 橡皮擦：指定的點被拿掉、原始資料不變
+    i = int(np.argmin(np.abs(x - 2000)))
+    ed = {"erase": [float(x[i]), float(x[i + 1])], "anchors": [], "sig": E.signature(x)}
+    d2 = E.apply(ds, ed)
+    assert len(d2.df) == len(ds.df) - 2 and len(load(p).df) == len(ds.df), "橡皮擦不能改到原始資料"
+    assert any("橡皮擦" in n for n in d2.notes)
+    bad = E.apply(ds, {**ed, "sig": [1, 2, 3]})
+    assert len(bad.df) == len(ds.df) and any("不同" in n for n in bad.notes), "檔案換了就不套用"
+    # 手動背景：通過每個錨點
+    anchors = [[1100.0, 10.0], [1800.0, 30.0], [2400.0, 25.0], [3000.0, 5.0]]
+    for interp in E.INTERPS:
+        bg = E.manual_baseline(np.array([a for a, _ in anchors]), anchors, interp)
+        assert np.allclose(bg, [b for _, b in anchors]), f"背景要通過錨點（{interp}）"
+    # 用 ALS 背景上的點當錨點 → G、2D 位置仍正確；加一個假的宇宙射線尖峰 → 擦掉後結果不變
+    from .core.peaks import baseline_als
+    bgals = baseline_als(y)
+    idx = np.linspace(0, x.size - 1, 10).round().astype(int)
+    anchors = [[float(x[k]), float(bgals[k])] for k in idx]
+    _, res = run("Raman", "石墨烯 G / 2D 峰", [p], baseline="手動（錨點）",
+                 edits={p: {"erase": [], "anchors": anchors, "interp": "平滑"}})
+    t = res.tables["peaks"]
+    _near(t["G 位置 (cm⁻¹)"].iloc[0], TRUTH["raman_G"], TOL["peak"], "手動背景的 G 位置")
+    _near(t["2D 位置 (cm⁻¹)"].iloc[0], TRUTH["raman_2D"], TOL["peak"], "手動背景的 2D 位置")
+    _, res = run("Raman", "石墨烯 G / 2D 峰", [p], edits=False)
+    _, res2 = run("Raman", "石墨烯 G / 2D 峰", [p], edits={p: {"erase": [float(x[i])], "anchors": []}})
+    _near(res2.tables["peaks"]["G 位置 (cm⁻¹)"].iloc[0], res.tables["peaks"]["G 位置 (cm⁻¹)"].iloc[0], 0.05,
+          "擦掉一個無關的點不影響 G")
+    # 背景扣除分析：選手動但沒有錨點 → 說明，不會當掉
+    _, res = run("Raman", "背景扣除", [p], method="手動（錨點）", edits=False)
+    assert any("錨點" in w for w in res.warnings), res.warnings
+    # 峰標註
+    fig = Figure()
+    run("Raman", "石墨烯 G / 2D 峰", [p], fig=fig, edits=False)
+    defs = L.defaults() + [L.make(L.defaults(), "Si", 520.7), L.make(L.defaults(), "D'", 1620.0)]
+    defs[0].update(text="G peak", size=15, color="#111111", bold=True)
+    n = L.draw(fig, defs)
+    texts = [(t.get_text(), t.get_fontsize()) for ax in fig.axes for t in ax.texts if getattr(t, "magic_key", None)]
+    names = [t.split("\n")[0] for t, _ in texts]
+    assert "G peak" in names and "2D" in names and "D'" in names, names
+    assert "Si" not in names, "顯示範圍外的標註不畫"
+    assert "hBN" not in names and "D" not in names, "沒有擬合到的峰（預設）不畫"
+    assert dict(texts)[next(t for t, _ in texts if t.startswith("G peak"))] == 15
+    g = next(t for t, _ in texts if t.startswith("G peak"))
+    _near(float(g.split("\n")[1]), TRUTH["raman_G"], TOL["peak"], "標註上的 G 位置")
+    # 疊圖方式
+    fig, res = run("Raman", "光譜檢視", [paths["raman_mono"], paths["raman_multi"]], stack="自動往上平移（不重疊）")
+    l0, l1 = [ln.get_ydata() for ln in fig.axes[0].lines[:2]]
+    assert np.nanmin(l1) >= np.nanmax(l0), "自動平移後不能重疊"
+    return f"橡皮擦、手動背景、峰標註 {n} 個、疊圖"
 
 
 def check_settings_and_tools(tmp):
@@ -432,7 +636,8 @@ def run_gui(rep, timeout=90):
                     raise AssertionError(f"{key}「{a.name}」沒有畫完（{page.right.text.get('1.0', 'end').strip()[:200]}）")
                 _gui_values(key, a.name, page.last["result"])        # 介面用預設參數算出來的數值也要對
                 results.append(f"{key}:{a.name}")
-        # 再切換一輪（頁面都建好了），量切換時間
+        # 再切換一輪（頁面都建好了），量切換時間。先等最後一張圖畫完（剛畫完馬上切走的頁面，回來時才補畫一次）
+        pump(lambda: False, 0.8)
         gaps.clear()
         t0 = time.perf_counter()
         for _ in range(3):
@@ -530,6 +735,7 @@ def run_gui(rep, timeout=90):
         last_row = ep.data.df.iloc[-1]
         assert last_row["Material"] == "hBN" and abs(last_row["Line width (nm)"] - 200) < 1e-9, last_row
         stats["anim_gap"] = max(frame)
+        _gui_03(app, root, pump, ep)
         stats.update(results=results, switch_ms=switch_ms, switch_total=switch_total, bg_gaps=bg_gaps,
                      timings=list(app.timings), fixed_ok=fixed_ok)
         app.close()
@@ -559,6 +765,129 @@ def run_gui(rep, timeout=90):
                 f"背景計算時畫面最長停頓 {max_gap * 1000:.0f} ms；單張圖最久繪製 {worst_draw * 1000:.0f} ms；"
                 f"蝕刻動畫最長一格 {stats.get('anim_gap', 0) * 1000:.0f} ms")
     rep.check("介面流暢度", perf)
+
+
+class _Ev:
+    def __init__(self, x, y, button=1):
+        self.x, self.y, self.button = x, y, button
+        self.inaxes = self.xdata = self.ydata = None
+
+
+def _gui_03(app, root, pump, ep):
+    """v0.3 的介面功能：圖表樣式、圖例點選 / 拖曳、Raman 編修與峰標註、蝕刻紀錄修改 / 刪除 / 歷史、AFM 匯入。"""
+    import tempfile
+    from tkinter import messagebox
+    from .testdata import afm_profile
+    saved = (messagebox.askyesno, messagebox.showinfo, messagebox.showwarning)
+    messagebox.askyesno = lambda *a, **k: True                    # 測試時自動按「是」
+    messagebox.showinfo = messagebox.showwarning = lambda *a, **k: None
+    try:
+        # ---- 圖表樣式與圖例（Raman 光譜檢視，三條光譜）
+        pg = app.pages["Raman"]
+        app.segment.select("Raman")
+        pg.features.select("光譜檢視")
+        pg.data.tree.selection_set(pg.data.tree.get_children()[:3])
+        g0 = pg.gen
+        pg.plot()
+        assert pump(lambda: pg.gen > g0 and pg.busy is None and pg.last and pg.last["analysis"].name == "光譜檢視", 20)
+        rp = pg.right
+        rp.size_vars["xlabel"].set("19")
+        rp._style_changed()
+        pump(lambda: False, 0.3)
+        assert rp.fig.axes[0].xaxis.label.get_size() == 19, "X 標籤字體大小沒有套用"
+        rp.size_vars["xlabel"].set("12")
+        rp._style_changed()
+        ax = rp.fig.axes[0]
+        leg = ax.get_legend()
+        t = leg.get_texts()[1]
+        bb = t.get_window_extent()
+        cx, cy = (bb.x0 + bb.x1) / 2, (bb.y0 + bb.y1) / 2
+        rp.tools.on_press(_Ev(cx, cy))
+        rp.tools.on_release(_Ev(cx, cy))
+        label = t.get_text()
+        assert [ln.get_visible() for ln in ax.lines if ln.get_label() == label] == [False], "點圖例沒有隱藏"
+        pg.redraw()
+        ax = rp.fig.axes[0]
+        assert not [ln for ln in ax.lines if ln.get_label() == label][0].get_visible(), "重畫後隱藏的要記住"
+        bb = ax.get_legend().get_window_extent()
+        rp.tools.on_press(_Ev(bb.x0 + 4, bb.y0 + 4))
+        for k in range(1, 4):
+            rp.tools.on_motion(_Ev(bb.x0 + 4 - 40 * k, bb.y0 + 4 - 30 * k))
+        rp.tools.on_release(_Ev(bb.x0 - 116, bb.y0 - 86))
+        assert pg.st["fig"]["光譜檢視"].get("legend"), "圖例拖曳後要記住位置"
+        rp.reset_legends()
+        pump(lambda: False, 0.3)
+        assert all(ln.get_visible() for ln in rp.fig.axes[0].lines), "↺ 圖例要讓隱藏的資料重新顯示"
+        # ---- Raman 編修
+        ed = pg.open_raman_editor()
+        pump(lambda: ed.x is not None, 5)
+        import numpy as np
+        i = int(np.argmax(ed.y))
+        n = ed.erase_box(ed.x[i] - 3, ed.x[i] + 3, ed.y[i] * 0.98, ed.y[i] * 1.02, ed.y)
+        assert n >= 1 and app.raman_edits.count(ed.path)[0] == n
+        ed.undo()
+        assert app.raman_edits.count(ed.path)[0] == 0, "復原沒有作用"
+        ed.redo()
+        ed.auto_anchors()
+        assert app.raman_edits.count(ed.path) == (n, 8)
+        ed.clear("anchors")
+        ed.clear("erase")
+        assert app.raman_edits.count(ed.path) == (0, 0)
+        ed.close()
+        # ---- 峰標註
+        pg.features.select("石墨烯 G / 2D 峰")
+        mono = [i for i in pg.data.tree.get_children() if "monolayer" in pg.data.tree.set(i, "name")]
+        pg.data.tree.selection_set(mono)
+        assert pump(lambda: pg.busy is None and pg.last and pg.last["analysis"].name == "石墨烯 G / 2D 峰"
+                    and len(pg.last["items"]) == 1, 20)
+        dlg = pg.open_peak_labels()
+        dlg.add("D'", 1620.0)
+        dlg.tree.selection_set("G")
+        root.update()
+        dlg.v["size"].set("17")
+        dlg.v["text"].set("G peak")
+        dlg.apply()
+        anns = {a.get_text().split("\n")[0]: a for ax in rp.fig.axes for a in ax.texts if getattr(a, "magic_key", None)}
+        assert "G peak" in anns and anns["G peak"].get_fontsize() == 17 and "D'" in anns, list(anns)
+        dlg.reset()
+        dlg.close()
+        # ---- 蝕刻紀錄：修改 → 歷史 → 刪除 → 還原
+        app.segment.select("Etching")
+        root.update()
+        ep.data.source_var.set("本機 CSV")
+        ep.data.reload()
+        assert pump(lambda: ep.data.df is not None and len(ep.data.df) >= 1, 10)
+        n0 = len(ep.data.df)
+        ep.data.tree.selection_set([str(n0)])
+        root.update()
+        wz = ep.data.edit_selected()
+        assert pump(lambda: wz.result is not None, 5), "修改視窗沒有算出結果"
+        wz.vars["cross_check"].set(True)
+        wz._method_changed()
+        d = tempfile.mkdtemp()
+        afm = wz.import_afm("sio2_step")
+        afm._no_ask = True
+        afm.add_files([afm_profile(os.path.join(d, "afm.txt"), h=2.9, n_profiles=3, noise=0.05)])
+        afm.fill()
+        assert len(wz.vars["sio2_step"].get().split(",")) == 3, wz.vars["sio2_step"].get()
+        wz.vars["resist_thickness"].set("300")
+        wz.vars["resist_after"].set("250")
+        pump(lambda: False, 0.4)
+        assert wz.result is not None and wz.result.sio2_cross and wz.result.r_resist, "交叉檢查 / 光阻沒有算"
+        wz.save()
+        assert pump(lambda: ep.data.df is not None and str(ep.data.df["Revision"].iloc[-1]) == "2", 10), "修改沒有存"
+        assert len(ep.data.df) == n0
+        ep.data.tree.selection_set([str(n0)])
+        root.update()
+        assert ep.data.delete_selected(confirm=False) == 1
+        assert pump(lambda: ep.data.df is not None and len(ep.data.df) == n0 - 1, 10)
+        win = ep.data.show_history()
+        assert [e["Action"] for e in win.entries] == ["刪除", "修改"], [e["Action"] for e in win.entries]
+        win.tree.selection_set("0")
+        win.restore()
+        assert pump(lambda: ep.data.df is not None and len(ep.data.df) == n0, 10), "還原刪除沒有作用"
+    finally:
+        messagebox.askyesno, messagebox.showinfo, messagebox.showwarning = saved
 
 
 def _gui_values(key, name, res):
@@ -617,6 +946,7 @@ def main(gui=True, log=print):
             rep.check("讀檔", lambda: check_readers(paths))
             rep.check("分析功能（數值和正確答案比對）", lambda: check_analyses(paths))
             rep.check("蝕刻速率", lambda: check_etching(paths))
+            rep.check("Raman 編修與峰標註", lambda: check_raman_tools(paths))
         rep.check("設定與工具", lambda: check_settings_and_tools(tmp))
         rep.check("自動更新（本機模擬）", lambda: check_update(tmp))
         if gui:

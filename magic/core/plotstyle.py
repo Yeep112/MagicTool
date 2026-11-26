@@ -67,13 +67,29 @@ def apply(force=False):
     _applied = True
 
 
-DEFAULT_STYLE = dict(grid=True, xlabel=12, ylabel=12, ticks=10, legend=8, title=11)
+DEFAULT_STYLE = dict(grid=True, xlabel=12, ylabel=12, cbar=12, ticks=10, legend=8, title=11)
+
+
+def colorbar_axes(fig):
+    out = set()
+    for ax in fig.axes:
+        for coll in list(ax.collections) + list(ax.images):
+            cb = getattr(coll, "colorbar", None)
+            if cb is not None:
+                out.add(cb.ax)
+    return out
 
 
 def apply_style(fig, st=None):
-    """把字體大小、格線套到圖上（畫完之後套用，改設定時不必重新計算）。"""
+    """把格線、各種字體大小套到圖上（畫完之後套用，改設定時不必重新計算）。"""
     st = {**DEFAULT_STYLE, **(st or {})}
+    cbars = colorbar_axes(fig)
     for ax in fig.axes:
+        if ax in cbars:
+            ax.yaxis.label.set_size(st["cbar"])
+            ax.xaxis.label.set_size(st["cbar"])
+            ax.tick_params(labelsize=st["ticks"])
+            continue
         if not ax.axison:
             continue
         ax.grid(bool(st["grid"]))
@@ -82,7 +98,15 @@ def apply_style(fig, st=None):
         ax.tick_params(labelsize=st["ticks"])
         if ax.get_title():
             ax.title.set_size(st["title"])
+        for t in (getattr(ax, "_left_title", None), getattr(ax, "_right_title", None)):
+            if t is not None and t.get_text():
+                t.set_size(min(st["title"], st["title"] * 0.8 if "\n" in t.get_text() else st["title"]))
         leg = ax.get_legend()
         if leg is not None:
             for t in leg.get_texts():
                 t.set_fontsize(st["legend"])
+            if leg.get_title() is not None:
+                leg.get_title().set_fontsize(st["legend"] + 1)
+    for leg in getattr(fig, "legends", []):
+        for t in leg.get_texts():
+            t.set_fontsize(st["legend"])

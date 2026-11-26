@@ -26,7 +26,7 @@ def parse_windows(text):
 def peak_params():
     return [
         P("baseline", "背景", BASELINES[1], choices=BASELINES,
-          tip="多項式只用沒有峰的點擬合（不會被峰拉高）；ALS 自動貼近底部"),
+          tip="多項式只用沒有峰的點擬合（不會被峰拉高）；ALS 自動貼近底部；手動 = 用「✎ 編修光譜」點的錨點"),
         P("degree", "多項式階數", 3),
         P("G_win", "G 峰範圍 (cm⁻¹)", "1550, 1620", kind="range"),
         P("D2_win", "2D 峰範圍 (cm⁻¹)", "2620, 2760", kind="range"),
@@ -40,6 +40,11 @@ def peak_params():
     ]
 
 
+def anchor_kw(ds):
+    """手動背景的錨點（沒有編修過就是空的）。"""
+    return dict(anchors=ds.header.get("anchors"), interp=ds.header.get("anchor_interp", "平滑"))
+
+
 def exclude_windows(p):
     wins = [p["G_win"], p["D2_win"], (1320.0, 1400.0)]
     if p.get("hbn"):
@@ -51,7 +56,7 @@ def exclude_windows(p):
 
 def analyze(ds, p):
     x, y = xy(ds)
-    bg = baseline(x, y, p["baseline"], degree=int(p.get("degree", 3)), exclude=exclude_windows(p))
+    bg = baseline(x, y, p["baseline"], degree=int(p.get("degree", 3)), exclude=exclude_windows(p), **anchor_kw(ds))
     corr = y - bg
     fits = {}
     for name, win_key, enabled in PEAKS:

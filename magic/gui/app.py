@@ -34,7 +34,8 @@ from . import theme as T
 from .page import Page
 from .widgets import Paned, Segmented, card
 
-VIEW_DEFAULTS = dict(size_mode="填滿視窗", fig_w=1100, fig_h=650, grid=True, font="中")
+VIEW_DEFAULTS = dict(size_mode="填滿視窗", fig_w=1100, fig_h=650, grid=True, font="中",
+                     xlabel=12, ylabel=12, cbar=12, ticks=10, legend=8, title=11)
 
 
 class App:
@@ -45,9 +46,15 @@ class App:
         self.dead = False
         self.settings = S.load_settings()
         self.state = S.load_gui_state()
-        self.view = {**VIEW_DEFAULTS, **self.state.get("view", {})}
+        saved_view = dict(self.state.get("view", {}))
+        if "xlabel" not in saved_view:              # 0.2 以前只有「字體 小 / 中 / 大」
+            from .figure_panel import FONT_SIZES
+            saved_view.update(FONT_SIZES.get(saved_view.get("font", "中"), FONT_SIZES["中"]))
+        self.view = {**VIEW_DEFAULTS, **saved_view}
         self.state["view"] = self.view
         self.analyses = load_analyses()
+        from ..raman.edits import EditStore
+        self.raman_edits = EditStore()               # Raman 橡皮擦、手動背景（只影響顯示，原始檔不變）
         self.queue = queue.Queue()
         self.executor = ThreadPoolExecutor(max_workers=3, thread_name_prefix="magic")
         self.pages = {}

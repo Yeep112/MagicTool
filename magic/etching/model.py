@@ -26,6 +26,11 @@ SiO2 蝕刻深度 d_SiO2（四種）：
 速率 r = d / t（t = 所有分段的電漿時間加總）。誤差：多點量測取平均 ± 標準差，
 加減法的誤差平方相加，σ_r = σ_d / t。
 蝕穿：剩下的材料 T' ≤ 容許值（0.5 nm 或 2σ）時，只能得到下限 r ≥ T / t。
+
+交叉檢查（cross_check = True）：同一個樣品如果也用其他量法量了（例如 marker 和 AFM 台階都有），
+每一種都算一次 d_SiO2（或 d_材料），和主要量法比較；差超過 max(1 nm, 2σ) 會提醒。
+光阻蝕刻率：有填光阻蝕刻前、後厚度 → r_光阻 = (h_光阻 − h'_光阻) / t、選擇比 r_材料 / r_光阻，
+並估計光阻最多撐多久（h_光阻 / r_光阻）。
 """
 from __future__ import annotations
 
@@ -49,6 +54,8 @@ MAT_METHODS = {
     "outside": "從基板量（T + d_SiO2 − H_out）",
 }
 THROUGH_TOL_NM = 0.5
+CROSS_TOL_NM = 1.0           # 交叉檢查：兩種量法相差超過 max(1 nm, 2σ) 才提醒
+RESIST_LOW = 0.2             # 光阻剩不到 20% 就提醒
 PA_PER = {"Pa": 1.0, "mTorr": 0.133322, "Torr": 133.322, "mbar": 100.0}
 
 
@@ -209,6 +216,9 @@ class EtchInput:
     mat_before: str = ""
     mat_step: str = ""
     mat_out: str = ""
+    # 交叉檢查、光阻
+    cross_check: bool = False
+    resist_after: str = ""
     notes: str = ""
 
     def gas_text(self):
@@ -246,17 +256,97 @@ class EtchResult:
     checks: list = field(default_factory=list)      # (True/False, 文字)
     explain: list = field(default_factory=list)     # 代入數字的算式
     measures: dict = field(default_factory=dict)    # 欄位 → Measure（寫進紀錄的原始值）
+    sio2_cross: list = field(default_factory=list)  # [(量法, d, σ, 差, 容許, ok)]
+    mat_cross: list = field(default_factory=list)
+    d_resist: float | None = None
+    s_resist: float | None = None
+    r_resist: float | None = None
+    sr_resist: float | None = None
+    sel_resist: float | None = None
+    resist_through: bool = False
+    resist_life: float | None = None                # 光阻最多撐幾秒（h_光阻 / r_光阻）
 
 
 def _q(*sigmas):
     return math.sqrt(sum((s or 0.0) ** 2 for s in sigmas))
 
 
+SIO2_FIELDS = {"afm_step": ("sio2_step",), "ellipsometer": ("sio2_before", "sio2_after"),
+               "marker": ("marker_before", "marker_out")}
+SIO2_SHORT = {"afm_step": "AFM 台階", "ellipsometer": "膜厚儀", "marker": "marker", "none": "—"}
+MAT_SHORT = {"inside": "圖案內台階", "outside": "從基板量"}
+
+
+def _filled(inp, keys):
+    return all(str(getattr(inp, k, "") or "").strip() for k in keys)
+
+
+def _sio2(m, inp, res, primary=True):
+    """用量法 m 算 d_SiO2 → (d, σ, 算式文字)。primary = 主要量法（才會記錄 measures、檢查 marker）。"""
+    if m == "afm_step":
+        st = parse_values(inp.sio2_step, "SiO2 台階（AFM）", True)
+        if primary:
+            res.measures["sio2_step"] = st
+        return st.mean, st.std, f"d_SiO2 = AFM 台階 = {st.text()} nm"
+    if m == "ellipsometer":
+        b = parse_values(inp.sio2_before, "SiO2 蝕刻前厚度", True)
+        a = parse_values(inp.sio2_after, "SiO2 蝕刻後厚度", True)
+        if primary:
+            res.measures.update(sio2_before=b, sio2_after=a)
+        d = b.mean - a.mean
+        return d, _q(b.std, a.std), f"d_SiO2 = h − h' = {b.mean:.2f} − {a.mean:.2f} = {d:.2f} nm"
+    tm = parse_values(inp.marker_before, "marker 蝕刻前厚度 T_m", True)
+    hm = parse_values(inp.marker_out, "從 SiO2 量到 marker 頂端 H_m,out", True)
+    own = parse_values(inp.marker_after_own, "marker 蝕刻後自身厚度 T'_m")
+    if primary:
+        res.measures.update(marker_before=tm, marker_out=hm)
+    if own is not None:
+        tpm, s_tpm = own.mean, own.std
+        if primary:
+            res.measures["marker_after_own"] = own
+            res.marker_etched = tm.mean - own.mean
+            ok = res.marker_etched >= -max(THROUGH_TOL_NM, 2 * _q(tm.std, own.std))
+            res.checks.append((ok, f"marker 自己被蝕刻 {res.marker_etched:.2f} nm（T_m − T'_m，應該 ≥ 0）"))
+            if not ok:
+                res.warnings.append("marker 蝕刻後反而比較厚：請確認 T_m、T'_m 有沒有填反，或有殘膠")
+        src = "T'_m（有量）"
+    else:
+        tpm, s_tpm = tm.mean, tm.std
+        src = "T_m（假設 marker 沒被蝕刻）"
+        if primary:
+            res.checks.append((True, "假設 marker（Cr/Au）在這個製程不會被蝕刻"))
+    d = hm.mean - tpm
+    return d, _q(hm.std, s_tpm), (f"d_SiO2 = H_m,out − T'_m = {hm.mean:.2f} − {tpm:.2f} = {d:.2f} nm"
+                                  f"　（T'_m 用 {src}）")
+
+
+def _cross(res, out, what, name1, name2, key2, d1, s1, d2, s2):
+    """兩種量法比對：差超過 max(1 nm, 2σ) 就提醒。"""
+    diff = d2 - d1
+    tol = max(CROSS_TOL_NM, 2 * _q(s1, s2))
+    ok = abs(diff) <= tol
+    out.append((key2, d2, s2, diff, tol, ok))
+    res.checks.append((ok, f"交叉檢查 {what}：{name1} {d1:.2f} vs {name2} {d2:.2f} ± {s2 or 0:.2f} nm"
+                           f"，差 {diff:+.2f} nm（容許 ±{tol:.2f}）"))
+    res.explain.append(f"　交叉檢查：d_{what}（{name2}）= {d2:.2f} ± {s2 or 0:.2f} nm，和{name1}差 {diff:+.2f} nm"
+                       f" {'✓' if ok else '⚠'}")
+    if not ok:
+        res.warnings.append(f"{what} 兩種量法差 {diff:+.2f} nm（超過容許 ±{tol:.2f} nm）：請確認量測位置、"
+                            f"是否有殘膠或 marker 被蝕刻，或欄位有沒有填錯")
+
+
+def cross_text(items, short):
+    """寫進 CSV 的交叉檢查文字。"""
+    return "；".join(f"{short.get(k, k)} {d:.3g}±{s or 0:.2g} (Δ{diff:+.3g}{'' if ok else ' ⚠'})"
+                     for k, d, s, diff, tol, ok in items)
+
+
 def compute(inp: EtchInput, clamp_negative_sio2=True) -> EtchResult:
     steps = parse_steps(inp.steps)
     t = sum(steps)
     res = EtchResult(steps, t, parse_length_nm(inp.line_width), parse_pressure_pa(inp.pressure, inp.pressure_unit))
-    for label, v in (("光阻厚度", inp.resist_thickness), ("ICP 功率", inp.icp_power), ("RF 功率", inp.rf_power),
+    parse_values(inp.resist_thickness, "光阻厚度")
+    for label, v in (("ICP 功率", inp.icp_power), ("RF 功率", inp.rf_power),
                      ("DC bias", inp.dc_bias)):
         _opt_float(v, label)
     for g, f in inp.gases:
@@ -269,37 +359,19 @@ def compute(inp: EtchInput, clamp_negative_sio2=True) -> EtchResult:
     if m not in SIO2_METHODS:
         raise EtchInputError(f"SiO2 量法只能是 {list(SIO2_METHODS)}")
     res.sio2_label = SIO2_METHODS[m]
-    if m == "afm_step":
-        st = parse_values(inp.sio2_step, "SiO2 台階（AFM）", True)
-        res.measures["sio2_step"] = st
-        res.d_sio2, res.s_sio2 = st.mean, st.std
-        res.explain.append(f"d_SiO2 = AFM 台階 = {st.text()} nm")
-    elif m == "ellipsometer":
-        b = parse_values(inp.sio2_before, "SiO2 蝕刻前厚度", True)
-        a = parse_values(inp.sio2_after, "SiO2 蝕刻後厚度", True)
-        res.measures.update(sio2_before=b, sio2_after=a)
-        res.d_sio2, res.s_sio2 = b.mean - a.mean, _q(b.std, a.std)
-        res.explain.append(f"d_SiO2 = h − h' = {b.mean:.2f} − {a.mean:.2f} = {res.d_sio2:.2f} nm")
-    elif m == "marker":
-        tm = parse_values(inp.marker_before, "marker 蝕刻前厚度 T_m", True)
-        hm = parse_values(inp.marker_out, "從 SiO2 量到 marker 頂端 H_m,out", True)
-        own = parse_values(inp.marker_after_own, "marker 蝕刻後自身厚度 T'_m")
-        res.measures.update(marker_before=tm, marker_out=hm)
-        if own is not None:
-            res.measures["marker_after_own"] = own
-            tpm, s_tpm = own.mean, own.std
-            res.marker_etched = tm.mean - own.mean
-            ok = res.marker_etched >= -max(THROUGH_TOL_NM, 2 * _q(tm.std, own.std))
-            res.checks.append((ok, f"marker 自己被蝕刻 {res.marker_etched:.2f} nm（T_m − T'_m，應該 ≥ 0）"))
-            if not ok:
-                res.warnings.append("marker 蝕刻後反而比較厚：請確認 T_m、T'_m 有沒有填反，或有殘膠")
-            src = "T'_m（有量）"
-        else:
-            tpm, s_tpm = tm.mean, tm.std
-            src = "T_m（假設 marker 沒被蝕刻）"
-            res.checks.append((True, "假設 marker（Cr/Au）在這個製程不會被蝕刻"))
-        res.d_sio2, res.s_sio2 = hm.mean - tpm, _q(hm.std, s_tpm)
-        res.explain.append(f"d_SiO2 = H_m,out − T'_m = {hm.mean:.2f} − {tpm:.2f} = {res.d_sio2:.2f} nm　（T'_m 用 {src}）")
+    if m != "none":
+        res.d_sio2, res.s_sio2, text = _sio2(m, inp, res, primary=True)
+        res.explain.append(text)
+        if inp.cross_check:
+            for other in ("afm_step", "ellipsometer", "marker"):
+                if other == m or not _filled(inp, SIO2_FIELDS[other]):
+                    continue
+                try:
+                    d2, s2, _ = _sio2(other, inp, EtchResult([], 1.0, None, None), primary=False)
+                except EtchInputError:
+                    continue
+                _cross(res, res.sio2_cross, "SiO2", SIO2_SHORT[m], SIO2_SHORT[other], other, res.d_sio2,
+                       res.s_sio2, d2, s2)
     if res.d_sio2 is not None:
         tol = max(THROUGH_TOL_NM, 2 * (res.s_sio2 or 0))
         if res.d_sio2 < -tol:
@@ -340,6 +412,21 @@ def compute(inp: EtchInput, clamp_negative_sio2=True) -> EtchResult:
         d = T.mean - res.remaining
         sd = _q(T.std, H.std, res.s_sio2)
         res.explain.append(f"d_{mat} = T + d_SiO2 − H_out = {T.mean:.2f} + {res.d_sio2:.2f} − {H.mean:.2f} = {d:.2f} nm")
+    if inp.cross_check:
+        if mm == "outside" and str(inp.mat_step).strip():
+            try:
+                S2 = parse_values(inp.mat_step, "圖案內台階 S")
+                _cross(res, res.mat_cross, mat, MAT_SHORT[mm], MAT_SHORT["inside"], "inside", d, sd, S2.mean, S2.std)
+            except EtchInputError:
+                pass
+        elif mm == "inside" and res.d_sio2 is not None and T is not None and str(inp.mat_out).strip():
+            try:
+                H2 = parse_values(inp.mat_out, "H_out")
+                d2 = T.mean + res.d_sio2 - H2.mean
+                _cross(res, res.mat_cross, mat, MAT_SHORT[mm], MAT_SHORT["outside"], "outside", d, sd, d2,
+                       _q(T.std, H2.std, res.s_sio2))
+            except EtchInputError:
+                pass
     if d < 0:
         res.warnings.append(f"{mat} 的蝕刻深度是負的（{d:.2f} nm）：請確認前後有沒有填反、或是否有殘膠")
     if res.remaining is not None:
@@ -362,6 +449,7 @@ def compute(inp: EtchInput, clamp_negative_sio2=True) -> EtchResult:
         rel = _q((res.sr_mat / res.r_mat) if res.r_mat else 0, (res.sr_sio2 / res.r_sio2) if res.r_sio2 else 0)
         res.s_selectivity = abs(res.selectivity) * rel
         res.explain.append(f"選擇比 r_{mat} / r_SiO2 = {res.selectivity:.3g}")
+    _resist(inp, res, t)
     for key, meas in res.measures.items():
         if meas.n == 1:
             res.checks.append((True, f"{FIELD_NAMES.get(key, key)}：單點量測，誤差以 0 計（建議量 3 條以上 line profile）"))
@@ -369,8 +457,46 @@ def compute(inp: EtchInput, clamp_negative_sio2=True) -> EtchResult:
     return res
 
 
+def _resist(inp, res, t):
+    """光阻蝕刻率（有填蝕刻前、後光阻厚度才算）。"""
+    rb = parse_values(inp.resist_thickness, "光阻蝕刻前厚度")
+    ra = parse_values(inp.resist_after, "光阻蝕刻後厚度")
+    if ra is None:
+        return
+    if rb is None:
+        res.warnings.append("有填光阻蝕刻後厚度，但沒有填蝕刻前厚度（① 樣品 → 光阻厚度），算不出光阻蝕刻率")
+        return
+    res.measures.update(resist_thickness=rb, resist_after=ra)
+    d, sd = rb.mean - ra.mean, _q(rb.std, ra.std)
+    tol = max(THROUGH_TOL_NM, 2 * _q(ra.std))
+    res.resist_through = ra.mean <= tol
+    res.d_resist, res.s_resist = d, sd
+    res.r_resist, res.sr_resist = d / t, sd / t
+    bound = "≥ " if res.resist_through else ""
+    res.explain.append(f"r_光阻 = (h_光阻 − h'_光阻) / t = ({rb.mean:.1f} − {ra.mean:.1f}) / {t:g} = "
+                       f"{bound}{res.r_resist:.4f} ± {res.sr_resist:.4f} nm/s")
+    if res.r_resist > 0 and res.r_mat is not None:
+        res.sel_resist = res.r_mat / res.r_resist
+        res.resist_life = rb.mean / res.r_resist
+        res.explain.append(f"選擇比 r_材料 / r_光阻 = {res.sel_resist:.3g}；這個光阻厚度最多撐約 {res.resist_life:.0f} s")
+    frac = ra.mean / rb.mean if rb.mean else 0.0
+    if res.resist_through:
+        res.warnings.append("光阻已經被蝕刻完：被保護的區域也可能被蝕刻，r_光阻 只是下限；請用更厚的光阻或縮短時間")
+        res.checks.append((False, "光阻已經被蝕刻完"))
+    elif frac < RESIST_LOW:
+        res.warnings.append(f"光阻只剩 {frac * 100:.0f}%（{ra.mean:.1f} nm）：再蝕刻久一點就會被蝕穿")
+        res.checks.append((False, f"光阻只剩 {frac * 100:.0f}%"))
+    else:
+        res.checks.append((True, f"光阻還剩 {frac * 100:.0f}%（{ra.mean:.1f} nm）"))
+    if res.resist_life is not None and res.lower_bound is False and res.r_mat and res.measures.get("mat_before"):
+        need = res.measures["mat_before"].mean / res.r_mat
+        if need > res.resist_life:
+            res.warnings.append(f"要蝕刻穿整層材料約需 {need:.0f} s，但光阻只撐約 {res.resist_life:.0f} s：光阻不夠厚")
+
+
 FIELD_NAMES = {
     "sio2_step": "SiO2 台階", "sio2_before": "SiO2 蝕刻前厚度", "sio2_after": "SiO2 蝕刻後厚度",
     "marker_before": "marker 蝕刻前 T_m", "marker_out": "H_m,out", "marker_after_own": "marker 蝕刻後 T'_m",
     "mat_before": "材料蝕刻前 T", "mat_step": "材料台階 S", "mat_out": "H_out",
+    "resist_thickness": "光阻蝕刻前厚度", "resist_after": "光阻蝕刻後厚度",
 }

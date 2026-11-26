@@ -2,11 +2,11 @@
 import numpy as np
 import pandas as pd
 
-from ..core.peaks import BASELINES, baseline
+from ..core.peaks import BASELINES, MANUAL, baseline
 from ..core.registry import P, Result, analysis
 from ..core.units import decimate, in_range
 from ..readers.raman_txt import xy
-from ._common import parse_windows
+from ._common import anchor_kw, parse_windows
 
 
 def _compute(items, p, progress):
@@ -17,8 +17,11 @@ def _compute(items, p, progress):
         x, y = xy(it.data)
         bgs = {}
         for mth in methods:
+            if mth == MANUAL and not it.data.header.get("anchors") and p["method"] != MANUAL:
+                continue                                 # 沒有錨點就不畫手動背景（除非選的就是它）
             try:
-                bgs[mth] = baseline(x, y, mth, degree=int(p["degree"]), exclude=excl, lam=p["lam"], p=p["p"])
+                bgs[mth] = baseline(x, y, mth, degree=int(p["degree"]), exclude=excl, lam=p["lam"], p=p["p"],
+                                    **anchor_kw(it.data))
             except Exception as e:                      # 某個方法失敗不影響其他方法
                 bgs[mth] = np.full_like(y, np.nan)
                 bgs[mth + "（失敗）"] = str(e)
@@ -47,7 +50,7 @@ def raman_background(fig, items, p, data=None):
     ax1 = fig.add_subplot(2, 1, 1)
     ax2 = fig.add_subplot(2, 1, 2, sharex=ax1)
     tables, lines, warns = {}, [], []
-    style = {BASELINES[1]: "#e4572e", BASELINES[2]: "#17a398", BASELINES[3]: "#7c3aed"}
+    style = {BASELINES[1]: "#e4572e", BASELINES[2]: "#17a398", BASELINES[3]: "#7c3aed", MANUAL: "#f2a541"}
     for k, r in enumerate(rows):
         x, y = r["x"], r["y"]
         m = in_range(x, p["x_range"])

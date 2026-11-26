@@ -28,22 +28,26 @@ FIELD_STAGE = {
     "resist": 1, "resist_thickness": 1, "line_width": 2,
     "instrument": 4, "icp_power": 4, "rf_power": 4, "dc_bias": 4, "pressure": 4, "steps": 4, "gas": 4,
     "sio2_step": 6, "sio2_before": 6, "sio2_after": 6, "marker_out": 6, "marker_after_own": 6,
-    "mat_step": 6, "mat_out": 6,
+    "mat_step": 6, "mat_out": 6, "resist_after": 6,
 }
 MULTI = {"sio2_step", "sio2_before", "sio2_after", "marker_before", "marker_out", "marker_after_own",
-         "mat_before", "mat_step", "mat_out"}
+         "mat_before", "mat_step", "mat_out", "resist_thickness", "resist_after"}
+AFM_FIELDS = {"sio2_step", "marker_before", "marker_out", "marker_after_own", "mat_before", "mat_step", "mat_out",
+              "resist_thickness", "resist_after"}
 HINT_MULTI = "可以輸入好幾個點（逗號或空白分開），會自動取平均 ± 標準差"
 KEEP_FIELDS = ("material", "resist", "resist_thickness", "line_width", "sample_type", "name", "instrument",
                "icp_power", "rf_power", "dc_bias", "pressure", "pressure_unit", "steps", "sio2_method", "mat_method")
 
 
 class EtchWizard(tk.Toplevel):
-    def __init__(self, panel, prefill=None):
+    def __init__(self, panel, prefill=None, edit=None):
+        """edit = {"rid": Record ID, "row": 表格裡那一筆, "n": 編號} → 修改模式。"""
         super().__init__(panel)
+        self.edit = edit
         self.panel = panel
         self.app = panel.app
         self.key = panel.key
-        self.title("新增蝕刻紀錄")
+        self.title("修改蝕刻紀錄" if edit else "新增蝕刻紀錄")
         self.configure(bg=T.CARD)
         self.transient(panel.winfo_toplevel())
         try:
@@ -54,6 +58,7 @@ class EtchWizard(tk.Toplevel):
         self.minsize(980, 640)
         self.vars = {}
         self.widgets = {}
+        self.labels_text = {}
         self.stats = {}
         self.result = None
         self._job = None
@@ -65,8 +70,10 @@ class EtchWizard(tk.Toplevel):
 
         head = tk.Frame(self, bg=a["main"], padx=16, pady=8)
         head.pack(fill="x")
-        tk.Label(head, text="新增蝕刻紀錄", bg=a["main"], fg="white", font=T.font(13, "bold")).pack(side="left")
-        tk.Label(head, text="　左邊看實驗流程與量測位置，右邊填數字；下面即時算出蝕刻率，按「寫入紀錄」才會存檔",
+        tk.Label(head, text=f"修改紀錄 #{edit['n']}" if edit else "新增蝕刻紀錄", bg=a["main"], fg="white",
+                 font=T.font(13, "bold")).pack(side="left")
+        tk.Label(head, text="　改好後按「儲存修改」；修改前的值會留在修改歷史，可以還原" if edit else
+                 "　左邊看實驗流程與量測位置，右邊填數字；下面即時算出蝕刻率，按「寫入紀錄」才會存檔",
                  bg=a["main"], fg=T.mix_color("#ffffff", a["main"], 0.25), font=T.font(9)).pack(side="left")
 
         self._build_bottom()
@@ -78,8 +85,13 @@ class EtchWizard(tk.Toplevel):
         body.add_pane(right, stretch=False, size=T.px(500), minsize=T.px(420))
         self._build_left(left)
         self._build_form(right)
-        last = dict(self.app.state.get("etch_last2", {}))
-        self._load(last)
+        if edit:
+            self._load(store.record_to_inputs(edit["row"]))
+            self.ok_btn.configure(text="儲存修改")
+            self.keep_box.pack_forget()
+        else:
+            last = dict(self.app.state.get("etch_last2", {}))
+            self._load(last)
         if prefill:
             self._load(prefill)
         self._method_changed()
@@ -257,7 +269,7 @@ class EtchWizard(tk.Toplevel):
         grid.columnconfigure(1, weight=1)
         return grid
 
-    def _field(self, grid, r, key, label, kind="entry", values=None, tip="", width=18):
+    def _field(self, grid, r, key, label, kind="entry", values=None, tip="", width=14):
         lab = tk.Label(grid, text=label, bg=T.CARD, fg=T.TEXT, font=T.font(9), anchor="w")
         lab.grid(row=r, column=0, sticky="w", padx=(0, 8), pady=2)
         var = self.vars.get(key) or tk.StringVar(value="")
@@ -269,16 +281,25 @@ class EtchWizard(tk.Toplevel):
         else:
             w = ttk.Entry(grid, textvariable=var, width=width)
         w.grid(row=r, column=1, sticky="ew", pady=2)
-        st = tk.Label(grid, text="", bg=T.CARD, fg=T.MUTED, font=T.font(8), anchor="w", width=20)
-        st.grid(row=r, column=2, sticky="w", padx=(6, 0))
+        holder = tk.Frame(grid, bg=T.CARD)
+        holder.grid(row=r, column=2, sticky="w", padx=(4, 0))
+        if key in AFM_FIELDS:
+            b = ttk.Button(holder, text="📈", width=3, style=f"{self.key}.Small.TButton",
+                           command=lambda k=key: self.import_afm(k))
+            b.pack(side="left", padx=(0, 2))
+            Tooltip(b, "從 AFM line profile 檔（Gwyddion / NanoScope 匯出的文字檔）自動找台階高度；可以一次選好幾條")
+        st = tk.Label(holder, text="", bg=T.CARD, fg=T.MUTED, font=T.font(8), anchor="w", width=13)
+        st.pack(side="left")
         self.stats[key] = st
+        extra = ()
         tips = [t for t in (tip, HINT_MULTI if key in MULTI else "") if t]
         if tips:
             Tooltip(lab, "\n".join(tips))
             Tooltip(w, "\n".join(tips))
         var.trace_add("write", lambda *a: self.schedule())
         w.bind("<FocusIn>", lambda e, k=key: self._focus(k), add="+")
-        self.widgets[key] = (lab, w, st)
+        self.widgets[key] = (lab, w, holder) + extra
+        self.labels_text[key] = label
         return w
 
     def _build_form(self, parent):
@@ -289,7 +310,7 @@ class EtchWizard(tk.Toplevel):
         g = self._section(body, "樣品", "①", "材料、光阻與 pattern")
         self._field(g, 0, "material", "要蝕刻的材料", "combo", MATERIALS, "可以直接打其他材料名稱")
         self._field(g, 1, "resist", "光阻", "combo", RESISTS)
-        self._field(g, 2, "resist_thickness", "光阻厚度 (nm，選填)")
+        self._field(g, 2, "resist_thickness", "光阻厚度 (nm，選填)", tip="蝕刻前的光阻厚度；蝕刻後也量的話（⑦ 光阻）可以算光阻蝕刻率")
         self._field(g, 3, "line_width", "pattern 線寬 (nm)", tip="被蝕刻的開口寬度。可以寫 500 或 0.5 um。"
                                                               "比較不同線寬的蝕刻率時一定要填")
         self._field(g, 4, "sample_type", "樣品類型（選填）", "combo", ["pattern", "direct", "test"])
@@ -305,9 +326,9 @@ class EtchWizard(tk.Toplevel):
         for i in range(3):
             gv, fv = tk.StringVar(), tk.StringVar()
             cb = ttk.Combobox(gf, textvariable=gv, values=[""] + GASES, width=6)
-            cb.grid(row=0, column=2 * i, padx=(0, 2))
-            e = ttk.Entry(gf, textvariable=fv, width=4)
-            e.grid(row=0, column=2 * i + 1, padx=(0, 6))
+            cb.grid(row=i // 2, column=2 * (i % 2), padx=(0, 2), pady=(0, 2))       # 兩個一排，窄視窗也放得下
+            e = ttk.Entry(gf, textvariable=fv, width=5)
+            e.grid(row=i // 2, column=2 * (i % 2) + 1, padx=(0, 8), pady=(0, 2))
             for v in (gv, fv):
                 v.trace_add("write", lambda *a: self.schedule())
             for w in (cb, e):
@@ -331,6 +352,13 @@ class EtchWizard(tk.Toplevel):
         for i, (k, text) in enumerate(SIO2_METHODS.items()):
             ttk.Radiobutton(rf, text=text, value=k, variable=self.vars["sio2_method"], style=f"{self.key}.TRadiobutton",
                             command=self._method_changed).grid(row=i, column=0, sticky="w")
+        self.vars["cross_check"] = tk.BooleanVar(value=False)
+        cc = ttk.Checkbutton(rf, text="⇄ 交叉檢查：也用其他量法量了（例如 marker 和 AFM 台階都有）",
+                             variable=self.vars["cross_check"], style=f"{self.key}.TCheckbutton",
+                             command=self._method_changed)
+        cc.grid(row=len(SIO2_METHODS), column=0, sticky="w", pady=(2, 0))
+        Tooltip(cc, "勾選後會顯示其他量法的欄位：每一種都算一次 d_SiO2（材料也是），和上面選的主要量法比較，"
+                    "差超過 max(1 nm, 2σ) 會提醒")
         self._field(g, 1, "sio2_step", "SiO2 台階 (nm)", tip="光阻保護的 SiO2 與蝕刻區之間的 AFM 台階")
         self._field(g, 2, "sio2_before", "SiO2 蝕刻前 h (nm)", tip="膜厚儀 / 橢偏儀量的絕對厚度")
         self._field(g, 3, "sio2_after", "SiO2 蝕刻後 h' (nm)")
@@ -354,19 +382,25 @@ class EtchWizard(tk.Toplevel):
         self._field(g, 3, "mat_out", "H_out (nm)", tip="從蝕刻後的 SiO2 表面量到材料頂端（紅色箭頭）")
         self.mat_rows = {"inside": ["mat_step"], "outside": ["mat_out"]}
 
+        g = self._section(body, "光阻蝕刻率（選填）", "⑦", "蝕刻後也量了光阻厚度才填（蝕刻前厚度填在 ① 的「光阻厚度」）："
+                                                        "算光阻蝕刻率、材料 / 光阻選擇比，判斷光阻夠不夠厚")
+        self._field(g, 0, "resist_after", "光阻蝕刻後厚度 (nm)", tip="蝕刻後、去光阻前，用 AFM 或膜厚儀量的光阻厚度")
+
         g = self._section(body, "備註", "✎")
         self._field(g, 0, "notes", "備註（選填）", width=30)
 
     def _method_changed(self):
         sm, mm = self.vars["sio2_method"].get(), self.vars["mat_method"].get()
-        for m, keys in self.sio2_rows.items():
-            for k in keys:
-                for w in self.widgets[k]:
-                    (w.grid() if m == sm else w.grid_remove())
-        for m, keys in self.mat_rows.items():
-            for k in keys:
-                for w in self.widgets[k]:
-                    (w.grid() if m == mm else w.grid_remove())
+        cross = bool(self.vars["cross_check"].get())
+        for rows, cur in ((self.sio2_rows, sm), (self.mat_rows, mm)):
+            for m, keys in rows.items():
+                for k in keys:
+                    show = m == cur or (cross and m != "none")
+                    for w in self.widgets[k]:
+                        (w.grid() if show else w.grid_remove())
+                    other = show and m != cur
+                    self.widgets[k][0].configure(text=("⇄ " if other else "") + self.labels_text[k],
+                                                 fg=T.MUTED if other else T.TEXT)
         lab = self.widgets["mat_before"][0]
         lab.configure(text="材料蝕刻前 T (nm)" + ("" if mm == "outside" else "（建議填）"))
         self.schedule()
@@ -428,8 +462,9 @@ class EtchWizard(tk.Toplevel):
         self.ok_btn.pack(fill="x")
         ttk.Button(right, text="取消", style=f"{self.key}.Ghost.TButton", command=self.close).pack(fill="x", pady=4)
         self.keep_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(right, text="寫入後繼續新增", variable=self.keep_var,
-                        style=f"{self.key}.TCheckbutton").pack(anchor="w")
+        self.keep_box = ttk.Checkbutton(right, text="寫入後繼續新增", variable=self.keep_var,
+                                        style=f"{self.key}.TCheckbutton")
+        self.keep_box.pack(anchor="w")
 
     def schedule(self):
         if self._job:
@@ -440,7 +475,7 @@ class EtchWizard(tk.Toplevel):
         self._job = self.after(150, self.refresh)
 
     def inputs(self) -> EtchInput:
-        v = {k: var.get().strip() for k, var in self.vars.items()}
+        v = {k: (var.get() if isinstance(var, tk.BooleanVar) else var.get().strip()) for k, var in self.vars.items()}
         kw = {f.name: v[f.name] for f in fields(EtchInput) if f.name in v}
         kw["gases"] = [(g.get().strip(), f.get().strip()) for g, f in self.gas_vars if g.get().strip()]
         return EtchInput(**kw)
@@ -486,8 +521,14 @@ class EtchWizard(tk.Toplevel):
                                fg=T.WARNING if res.lower_bound else self.acc["text"])
             sio2 = "SiO2：沒有量" if res.r_sio2 is None else f"r_SiO2 = {res.r_sio2:.4g} ± {res.sr_sio2:.2g} nm/s"
             sel = "" if res.selectivity is None else f"　選擇比 {res.selectivity:.3g}"
-            self.small.configure(text=f"{sio2}{sel}　｜　t = {res.t_total:g} s")
-            self.checks.configure(text="\n".join(("✓ " if ok else "⚠ ") + txt for ok, txt in res.checks[:4]),
+            resist = ""
+            if res.r_resist is not None:
+                resist = (f"\nr_光阻 = {'≥ ' if res.resist_through else ''}{res.r_resist:.4g} nm/s"
+                          + (f"　材料 / 光阻 = {res.sel_resist:.3g}" if res.sel_resist else "")
+                          + (f"　光阻約撐 {res.resist_life:.0f} s" if res.resist_life else ""))
+            self.small.configure(text=f"{sio2}{sel}　｜　t = {res.t_total:g} s{resist}")
+            order = sorted(res.checks, key=lambda c: c[0])                # 有問題的排前面
+            self.checks.configure(text="\n".join(("✓ " if ok else "⚠ ") + txt for ok, txt in order[:5]),
                                   fg=T.WARNING if res.warnings else T.MUTED)
             self.explain.delete("1.0", "end")
             self.explain.insert("end", "\n".join(res.explain))
@@ -527,7 +568,10 @@ class EtchWizard(tk.Toplevel):
                     gv.set(g)
                     fv.set(f)
             elif k in self.vars and v is not None:
-                self.vars[k].set(str(v))
+                if isinstance(self.vars[k], tk.BooleanVar):
+                    self.vars[k].set(bool(v))
+                else:
+                    self.vars[k].set(str(v))
         if not any(g.get() for g, _ in self.gas_vars):
             self.gas_vars[0][0].set("SF6")
         for k, default in (("material", "hBN"), ("resist", "PMMA"), ("instrument", "ICP-RIE"), ("steps", "30")):
@@ -547,6 +591,9 @@ class EtchWizard(tk.Toplevel):
             return
         rec = store.make_record(inp, res, version=__version__)
         path = self.panel.csv_path()
+        if self.edit:
+            self._save_edit(rec, path)
+            return
         try:
             existing = store.read_log(path)
         except Exception:
@@ -557,7 +604,7 @@ class EtchWizard(tk.Toplevel):
             return
         notes = []
         try:
-            store.append_record(rec, path)
+            rec = store.append_record(rec, path)
         except store.NeedsUpgrade:
             if store.file_schema(path) != "v1":
                 messagebox.showerror("新增蝕刻紀錄", f"紀錄檔的欄位看不懂，沒有寫入：\n{path}", parent=self)
@@ -568,7 +615,7 @@ class EtchWizard(tk.Toplevel):
                 return
             backup = store.upgrade_file(path)
             notes.append(f"舊紀錄已備份：{os.path.basename(str(backup))}")
-            store.append_record(rec, path)
+            rec = store.append_record(rec, path)
         except OSError as e:
             messagebox.showerror("新增蝕刻紀錄", f"寫入 CSV 失敗（檔案是不是被 Excel 開著？）：\n{e}", parent=self)
             return
@@ -600,10 +647,52 @@ class EtchWizard(tk.Toplevel):
         self.panel.source_var.set("本機 CSV")
         self.panel.reload(select_last=True)
         if self.keep_var.get():
-            for k in MULTI | {"notes"}:
+            for k in (MULTI - {"resist_thickness"}) | {"notes"}:
                 self.vars[k].set("")
         else:
             self.close()
+
+    def import_afm(self, key):
+        """📈：從 AFM line profile 檔找台階高度，填進這個欄位。"""
+        from .afm_import import AfmImportDialog
+        win = AfmImportDialog(self, key, self.labels_text.get(key, key))
+        self._afm = win
+        return win
+
+    def _save_edit(self, rec, path):
+        """修改模式：取代那一筆（舊值寫進修改歷史），同步 Excel / Google Sheet。"""
+        rid, n = self.edit["rid"], self.edit["n"]
+        try:
+            old, new = store.replace_record(path, rid, rec)
+        except store.RecordNotFound as e:
+            messagebox.showerror("修改紀錄", str(e), parent=self)
+            return
+        except OSError as e:
+            messagebox.showerror("修改紀錄", f"寫入 CSV 失敗（檔案是不是被 Excel 開著？）：\n{e}", parent=self)
+            return
+        notes = [f"第 {n} 筆已修改（修改前的值在「修改歷史」，可以還原）"]
+        et = self.app.settings.get("etching", {})
+        if et.get("xlsx_mirror"):
+            try:
+                store.export_xlsx(store.read_log(path), os.path.splitext(str(path))[0] + ".xlsx")
+                notes.append("Excel 也已更新")
+            except Exception as e:
+                notes.append(f"Excel 更新失敗：{e}")
+        if et.get("gsheet_enabled"):
+            settings = self.app.settings
+
+            def work():
+                try:
+                    store.gsheet_update(rid, new, old, et.get("gsheet_key", ""), S.service_account_path(settings),
+                                        et.get("gsheet_worksheet", ""))
+                    self.app.post(("status", ("Google Sheet 也已修改", "ok")))
+                except Exception as e:
+                    self.app.post(("status", (f"Google Sheet 修改失敗（本機 CSV 已改好）：{e}", "error")))
+            self.app.submit(work)
+            notes.append("Google Sheet 修改中…")
+        self.app.status("；".join(notes), "ok")
+        self.panel.reload(select_id=rid)
+        self.close()
 
     def close(self):
         self.stop()

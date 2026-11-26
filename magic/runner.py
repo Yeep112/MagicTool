@@ -62,12 +62,19 @@ def parse_params(analysis, overrides=None):
     return p
 
 
-def run(instrument, name, sources, fig=None, progress=None, **params):
+def run(instrument, name, sources, fig=None, progress=None, edits=True, **params):
+    """edits：Raman 是否套用介面裡做的橡皮擦與手動背景（True = 套用，False = 用原始資料，
+    或直接給 {路徑: 編修} dict）。"""
     from .core.registry import find
     a = find(instrument, name)
     if a is None:
         raise KeyError(f"{instrument} 沒有「{name}」；可用：{list_analyses(instrument)}")
     items = make_items(instrument, sources)
+    if instrument == "Raman" and edits:
+        from .raman.edits import EditStore, apply_all
+        snap = edits if isinstance(edits, dict) else EditStore().snapshot([it.path for it in items])
+        snap = {os.path.normcase(os.path.abspath(k)): v for k, v in snap.items()}
+        apply_all(items, snap)
     p = parse_params(a, params)
     from .core import plotstyle
     plotstyle.apply()

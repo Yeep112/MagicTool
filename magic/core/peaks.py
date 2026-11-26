@@ -102,7 +102,8 @@ def width_at_mean(x, y, window=(2660.0, 2720.0)):
 # ---------------------------------------------------------------------------
 # 背景
 # ---------------------------------------------------------------------------
-BASELINES = ["無", "多項式（只用無峰區）", "ALS（自動）", "指數（只用無峰區）"]
+BASELINES = ["無", "多項式（只用無峰區）", "ALS（自動）", "指數（只用無峰區）", "手動（錨點）"]
+MANUAL = BASELINES[4]
 
 
 def _mask_out(x, exclude):
@@ -172,7 +173,8 @@ def baseline_exp(x, y, exclude=()):
         return baseline_poly(x, y, 2, exclude)
 
 
-def baseline(x, y, method, degree=3, exclude=(), lam=1e5, p=0.01):
+def baseline(x, y, method, degree=3, exclude=(), lam=1e5, p=0.01, anchors=None, interp="平滑"):
+    """method 是 BASELINES 之一。「手動（錨點）」用 anchors（[(x, y), ...]，在 ✎ 編修光譜 裡點選）。"""
     if method in (None, "", BASELINES[0]):
         return np.zeros_like(np.asarray(y, float))
     if method == BASELINES[1]:
@@ -184,4 +186,7 @@ def baseline(x, y, method, degree=3, exclude=(), lam=1e5, p=0.01):
         return z
     if method == BASELINES[3]:
         return baseline_exp(x, y, exclude)
+    if method == MANUAL:
+        from ..raman.edits import manual_baseline
+        return manual_baseline(x, anchors, interp)
     raise ValueError(f"不認得的背景方法：{method}")

@@ -40,6 +40,11 @@ def test_etching(paths):
     selftest.check_etching(paths)
 
 
+def test_raman_tools(paths):
+    from magic import selftest
+    selftest.check_raman_tools(paths)
+
+
 def test_settings_and_tools(paths, tmp_path):
     from magic import selftest
     selftest.check_settings_and_tools(str(tmp_path))

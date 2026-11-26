@@ -4,6 +4,7 @@ import numpy as np
 from ..core.registry import P, Result, analysis
 from ..core.units import decimate
 from . import _common as C
+from .labels import register_peak
 
 COLORS = {"G": "#e4572e", "2D": "#2563eb", "hBN": "#17a398", "D": "#7c3aed"}
 
@@ -12,14 +13,14 @@ def _compute(items, p, progress):
     return C.compute(items, p, progress)
 
 
-def _mark(ax, f, name, offset=0.0, show_fit=True):
+def _mark(ax, f, name, offset=0.0, show_fit=True, series=0):
+    """畫擬合曲線，並告訴標註系統峰的位置（文字由「🏷 峰標註」決定：文字、顏色、大小、字型都可以改）。"""
     if not f["ok"]:
         return
     if show_fit and f["x_fit"].size:
         ax.plot(f["x_fit"], f["y_fit"] + offset, "--", color=COLORS.get(name, "k"), lw=1.2, gid="nohover")
     top = f["height"] + (f["offset"] if np.isfinite(f["offset"]) else 0) + offset
-    ax.annotate(f"{name}\n{f['pos']:.1f}", (f["pos"], top), xytext=(0, 6), textcoords="offset points",
-                ha="center", va="bottom", fontsize=9, color=COLORS.get(name, "k"))
+    register_peak(ax, name, f["pos"], top, series)
 
 
 @analysis("Raman", "石墨烯 G / 2D 峰", group="參數萃取", icon="G", order=10,
@@ -65,13 +66,13 @@ def raman_graphene(fig, items, p, data=None):
     else:
         ax = fig.add_subplot()
         off = 0.0
-        for r in rows:
+        for k, r in enumerate(rows):
             m = C.mask(r["x"], p["x_range"])
             xs, cs = decimate(r["x"][m], r["corr"][m])
             ax.plot(xs, cs + off, color=r["item"].color, lw=1.1,
                     label=f"{r['item'].label}（2D/G = {C.fmt(r['ratio'], 2)}）")
             for name, f in r["fits"].items():
-                _mark(ax, f, name, off, show_fit=False)
+                _mark(ax, f, name, off, show_fit=False, series=k)
             off += (np.nanmax(cs) if cs.size else 0) * 1.15
         ax.set_xlabel("Raman shift (cm$^{-1}$)")
         ax.set_ylabel("扣背景後（平移疊圖）")
