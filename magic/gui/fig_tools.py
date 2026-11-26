@@ -44,6 +44,20 @@ def _value(text):
     return "" if text.strip() == "-" else text
 
 
+TITLE_SCOPES = ["只有這張圖", "這台機台全部", "所有圖"]       # 這個功能 / 這台機台的全部功能 / 所有機台所有功能
+PLACEHOLDERS = [("{日期}", "今天的日期，例如 20261126"), ("{時間}", "現在時間，例如 1724"),
+                ("{機台}", "PPMS / SQUID / Raman / Etching"), ("{功能}", "分析功能的名稱，例如 背景扣除"),
+                ("{檔名}", "第一個檔案的名稱（紀錄類是「N 筆紀錄」）")]
+
+
+def expand_title(text, ctx):
+    """把 {日期}、{時間}、{機台}、{功能}、{檔名} 換成實際內容（其他文字照原樣）。"""
+    import re
+    import time
+    vals = {"日期": time.strftime("%Y%m%d"), "時間": time.strftime("%H%M"), **(ctx or {})}
+    return re.sub(r"\{(日期|時間|機台|功能|檔名)\}", lambda m: str(vals.get(m.group(1), "")), text)
+
+
 def apply_hidden(ax, hidden, rescale=True):
     """圖例名稱在 hidden 裡的資料藏起來（線、散點、誤差棒），圖例那一項變淡；Y 範圍只算看得到的資料。"""
     changed = False
@@ -95,6 +109,8 @@ class FigTools:
         self.get_ov = lambda: {}
         self.save = lambda: None
         self.status = lambda text, kind="info": None
+        self.title_raw = lambda: ""                 # 目前這張圖要顯示的標題（頁面依套用範圍決定）
+        self.title_ctx = lambda: {}
         self.drag = None
         c = panel.canvas
         c.mpl_connect("button_press_event", self.on_press)
@@ -121,8 +137,7 @@ class FigTools:
         for k, ax in enumerate(axes):
             for kk, v in (("title", ax.get_title()), ("xlabel", ax.get_xlabel()), ("ylabel", ax.get_ylabel())):
                 self._auto_labels[(k, kk)] = v
-        if ov.get("suptitle"):
-            self.fig.suptitle(_value(ov["suptitle"]))
+        self.apply_title()
         for idx, d in (ov.get("axes") or {}).items():
             k = int(idx)
             if k >= len(axes):
@@ -144,6 +159,22 @@ class FigTools:
             off = moved.get(ann.magic_key)
             if off:
                 ann.xyann = tuple(off)
+
+    def apply_title(self):
+        """整張圖的標題（⌈圖標題⌋ 那一列）：字體大小、粗體跟著樣式；空白或「-」= 不顯示。"""
+        raw = (self.title_raw() or "").strip()
+        text = "" if raw in ("", "-") else expand_title(raw, self.title_ctx())
+        fig = self.fig
+        if text and self.fig.axes:
+            st = self.panel.style_dict()
+            fig.suptitle(text, fontsize=st.get("suptitle", 15),
+                         fontweight="bold" if st.get("suptitle_bold", True) else "normal", color="#111827")
+            fig._magic_title = True
+        elif getattr(fig, "_magic_title", False) and getattr(fig, "_suptitle", None) is not None:
+            fig._suptitle.remove()
+            fig._suptitle = None
+            fig._magic_title = False
+        return text
 
     def texts(self):
         out = []
@@ -321,8 +352,9 @@ class FigTools:
         body = tk.Frame(win, bg=T.CARD)
         body.pack(fill="both", expand=True, padx=12)
         entries = {}
-        sup_var = tk.StringVar(value=ov.get("suptitle", ""))
-        tk.Label(body, text="整張圖的標題", bg=T.CARD, fg=T.TEXT, font=T.font(10, "bold")).grid(row=0, column=0, sticky="w")
+        sup_var = tk.StringVar(value="" if ov.get("suptitle", "") == "-" else ov.get("suptitle", ""))
+        tk.Label(body, text="整張圖的標題\n（只有這張圖）", bg=T.CARD, fg=T.TEXT, font=T.font(10, "bold"),
+                 justify="left").grid(row=0, column=0, sticky="w")
         ttk.Entry(body, textvariable=sup_var, width=50).grid(row=0, column=1, columnspan=2, sticky="ew", pady=3)
         cbars = colorbar_axes(self.fig)
         saved = ov.get("axes") or {}
@@ -347,7 +379,10 @@ class FigTools:
         body.columnconfigure(1, weight=1)
 
         def apply(close=False):
-            ov["suptitle"] = sup_var.get().strip()
+            if sup_var.get().strip():
+                ov["suptitle"] = sup_var.get().strip()
+            elif ov.get("suptitle") != "-":
+                ov.pop("suptitle", None)
             axes_d = {}
             for (k, kk), var in entries.items():
                 if var.get().strip():

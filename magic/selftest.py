@@ -916,6 +916,26 @@ def _gui_03(app, root, pump, ep):
         assert pg.st["fig"]["光譜檢視"].get("legend"), "圖例拖曳後要記住位置"
         rp.reset_legends()
         pump(lambda: False, 0.3)
+        # ---- 圖標題：新增（含 {日期}{機台}）、字體大小、範圍、移除
+        rp.title_scope.set("只有這張圖")
+        rp.title_var.set("{日期}的{機台}分析圖")
+        rp._commit_title()
+        want = time.strftime("%Y%m%d") + "的Raman分析圖"
+        sup = rp.fig._suptitle
+        assert sup is not None and sup.get_text() == want, "圖標題沒有出現"
+        rp._title_size_var.set("23")
+        rp._style_changed()
+        assert rp.fig._suptitle.get_fontsize() == 23, "圖標題的字體大小沒有套用"
+        assert pg.figure_title() == want, "存圖的預設檔名要用標題"
+        rp.title_scope.set("所有圖")
+        rp.title_var.set("全部 {功能}")
+        rp._commit_title()
+        pp = app.pages["PPMS"]
+        assert pp.title_effective() == ("全部 {功能}", "所有圖"), pp.title_effective()
+        rp.remove_title()
+        assert rp.fig._suptitle is None and not app.view.get("fig_title"), "移除標題沒有作用"
+        rp._title_size_var.set("15")
+        rp._style_changed()
         assert all(ln.get_visible() for ln in rp.fig.axes[0].lines), "↺ 圖例要讓隱藏的資料重新顯示"
         # ---- Raman 編修
         ed = pg.open_raman_editor()

@@ -12,10 +12,10 @@ from .hover import Hover
 from .widgets import Chip, Paned
 
 SIZE_MODES = ["填滿視窗", "固定大小"]
-FONT_SIZES = {"小": dict(xlabel=10, ylabel=10, cbar=10, ticks=9, legend=7, title=10),
-              "中": dict(xlabel=12, ylabel=12, cbar=12, ticks=10, legend=8, title=11),
-              "大": dict(xlabel=14, ylabel=14, cbar=14, ticks=12, legend=10, title=13),
-              "特大": dict(xlabel=18, ylabel=18, cbar=16, ticks=15, legend=13, title=16)}
+FONT_SIZES = {"小": dict(xlabel=10, ylabel=10, cbar=10, ticks=9, legend=7, title=10, suptitle=13),
+              "中": dict(xlabel=12, ylabel=12, cbar=12, ticks=10, legend=8, title=11, suptitle=15),
+              "大": dict(xlabel=14, ylabel=14, cbar=14, ticks=12, legend=10, title=13, suptitle=18),
+              "特大": dict(xlabel=18, ylabel=18, cbar=16, ticks=15, legend=13, title=16, suptitle=22)}
 STYLE_FIELDS = [("xlabel", "X 標籤"), ("ylabel", "Y 標籤"), ("cbar", "色條"), ("ticks", "刻度"),
                 ("legend", "圖例"), ("title", "標題")]
 PANEL_MIN = (380, 300)            # 每個子圖的最小大小（100% 介面），不夠放就出現捲軸
@@ -213,6 +213,8 @@ class FigurePanel(tk.Frame):
     def _build_style_bar(self):
         bar = tk.Frame(self, bg=T.SUBTLE, highlightthickness=1, highlightbackground=T.BORDER)
         bar.pack(fill="x", pady=(8, 0))
+        r0 = tk.Frame(bar, bg=T.SUBTLE)
+        r0.pack(fill="x")
         r1 = tk.Frame(bar, bg=T.SUBTLE)
         r1.pack(fill="x")
         r2 = tk.Frame(bar, bg=T.SUBTLE)
@@ -221,6 +223,7 @@ class FigurePanel(tk.Frame):
         def lab(parent, text, bold=False, padx=(8, 2)):
             tk.Label(parent, text=text, bg=T.SUBTLE, fg=T.MUTED, font=T.font(9, "bold" if bold else "normal")).pack(
                 side="left", padx=padx)
+        self._build_title_row(r0, lab)
         # 第一列：大小
         lab(r1, "圖的大小", True, (8, 6))
         self.size_var = tk.StringVar(value=self.view.get("size_mode", SIZE_MODES[0]))
@@ -265,6 +268,100 @@ class FigurePanel(tk.Frame):
             e.bind("<Return>", lambda ev: self._style_changed())
             e.bind("<FocusOut>", lambda ev: self._style_changed())
 
+    def _build_title_row(self, row, lab):
+        """圖標題：新增 / 修改 / 移除；可以用 {日期}{機台}{功能}{檔名}；套用範圍：這個功能 / 這台機台 / 所有圖。"""
+        from .fig_tools import PLACEHOLDERS, TITLE_SCOPES
+        from .params_panel import Tooltip
+        lab(row, "圖標題", True, (8, 6))
+        self.title_var = tk.StringVar()
+        self.title_entry = ttk.Entry(row, textvariable=self.title_var, width=22)
+        self.title_entry.pack(side="left", pady=3)
+        Tooltip(self.title_entry, "例如「{日期}的{機台}分析圖」→「20261126的Raman分析圖」。空白 = 沒有標題")
+        menu = tk.Menu(row, tearoff=False)
+        for ph, desc in PLACEHOLDERS:
+            menu.add_command(label=f"{ph}　{desc}", command=lambda ph=ph: self._insert_placeholder(ph))
+        menu.add_separator()
+        for ex in ("{日期}的{機台}分析圖", "{日期} {功能}", "{檔名} — {功能}"):
+            menu.add_command(label=f"範例：{ex}", command=lambda ex=ex: self.title_var.set(ex))
+        b = ttk.Button(row, text="插入 ▾", width=6, style=f"{self.key}.Small.TButton")
+        b.configure(command=lambda: menu.tk_popup(b.winfo_rootx(), b.winfo_rooty() + b.winfo_height()))
+        b.pack(side="left", padx=(4, 0))
+        lab(row, "範圍", padx=(8, 2))
+        self.title_scope = tk.StringVar(value=TITLE_SCOPES[0])
+        sc = ttk.Combobox(row, textvariable=self.title_scope, values=TITLE_SCOPES, state="readonly", width=10)
+        Tooltip(sc, "只有這張圖 = 這個分析功能；這台機台全部 = 這台機台的所有功能；所有圖 = 所有機台、所有功能")
+        sc.pack(side="left")
+        sc.bind("<<ComboboxSelected>>", lambda e: self._title_changed(now=True))
+        lab(row, "大小", padx=(8, 2))
+        var = tk.StringVar(value=str(self.view.get("suptitle", FONT_SIZES["中"]["suptitle"])))
+        sp = ttk.Spinbox(row, from_=6, to=60, increment=1, textvariable=var, width=3, command=self._style_changed)
+        sp.pack(side="left")
+        sp.bind("<Return>", lambda e: self._style_changed())
+        sp.bind("<FocusOut>", lambda e: self._style_changed())
+        self._title_size_var = var
+        self.bold_var = tk.BooleanVar(value=bool(self.view.get("suptitle_bold", True)))
+        ttk.Checkbutton(row, text="粗體", variable=self.bold_var, style=f"{self.key}.TCheckbutton",
+                        command=self._style_changed).pack(side="left", padx=(6, 0))
+        rm = ttk.Button(row, text="✕ 移除", width=6, style=f"{self.key}.Small.TButton", command=self.remove_title)
+        rm.pack(side="left", padx=(8, 0))
+        Tooltip(rm, "依「套用到」的範圍移除：只有這張圖、這台機台、或所有圖都不顯示標題")
+        self._title_job = None
+        self._title_loading = False
+        self.title_api = None                 # 頁面設定（存在哪裡、目前是哪一層）
+        self.title_var.trace_add("write", lambda *a: self._title_changed())
+
+    def _insert_placeholder(self, ph):
+        e = self.title_entry
+        try:
+            i = e.index("insert")
+        except tk.TclError:
+            i = "end"
+        e.insert(i, ph)
+        e.focus_set()
+
+    def _title_changed(self, now=False):
+        if self._title_loading or self.title_api is None:
+            return
+        if self._title_job is not None:
+            try:
+                self.after_cancel(self._title_job)
+            except Exception:
+                pass
+            self._title_job = None
+        if now:
+            self._commit_title()
+        else:
+            self._title_job = self.after(450, self._commit_title)
+
+    def _commit_title(self):
+        self._title_job = None
+        if self.title_api is None:
+            return
+        self.title_api.title_set(self.title_scope.get(), self.title_var.get().strip())
+        self.restyle()
+
+    def remove_title(self):
+        if self.title_api is None:
+            return
+        scope = self.title_api.title_remove(self.title_scope.get())
+        self.sync_title()
+        self.restyle()
+        self.tools.status(f"已移除標題（{scope}）；要加回來，直接在「圖標題」輸入", "ok")
+
+    def sync_title(self):
+        """換功能、畫完圖時：輸入框顯示這張圖目前的標題，以及它是哪個範圍設定的。"""
+        if self.title_api is None or (self.focus_get() is self.title_entry and self._title_job is not None):
+            return
+        text, scope = self.title_api.title_effective()
+        self._title_loading = True
+        try:
+            if self.title_var.get() != text:
+                self.title_var.set(text)
+            if scope:
+                self.title_scope.set(scope)
+        finally:
+            self._title_loading = False
+
     def _preset(self):
         """「一鍵」小 / 中 / 大 / 特大：一次設定所有字體大小。"""
         pre = FONT_SIZES.get(self.font_var.get(), FONT_SIZES["中"])
@@ -272,6 +369,7 @@ class FigurePanel(tk.Frame):
         try:
             for k, var in self.size_vars.items():
                 var.set(str(pre[k]))
+            self._title_size_var.set(str(pre["suptitle"]))
         finally:
             self._syncing = False
         self._style_changed()
@@ -285,11 +383,12 @@ class FigurePanel(tk.Frame):
         except ValueError:
             w, h = self.view.get("fig_w", 1100), self.view.get("fig_h", 650)
         sizes = {}
-        for k, var in self.size_vars.items():
+        for k, var in list(self.size_vars.items()) + [("suptitle", self._title_size_var)]:
             try:
                 sizes[k] = max(4.0, min(60.0, float(var.get())))
             except ValueError:
                 sizes[k] = self.view.get(k, FONT_SIZES["中"][k])
+        sizes["suptitle_bold"] = bool(self.bold_var.get())
         new = dict(size_mode=self.size_var.get(), fig_w=w, fig_h=h, grid=bool(self.grid_var.get()),
                    font=self.font_var.get(), **sizes)
         if all(self.view.get(k) == v for k, v in new.items()):
@@ -308,17 +407,21 @@ class FigurePanel(tk.Frame):
                     var.set(self.view.get(key))
             if bool(self.grid_var.get()) != bool(self.view.get("grid", True)):
                 self.grid_var.set(bool(self.view.get("grid", True)))
-            for k, var in self.size_vars.items():
+            for k, var in list(self.size_vars.items()) + [("suptitle", self._title_size_var)]:
                 v = self.view.get(k, FONT_SIZES["中"][k])
                 txt = f"{v:g}" if isinstance(v, (int, float)) else str(v)
                 if var.get() != txt:
                     var.set(txt)
+            if bool(self.bold_var.get()) != bool(self.view.get("suptitle_bold", True)):
+                self.bold_var.set(bool(self.view.get("suptitle_bold", True)))
+            self.sync_title()
         finally:
             self._syncing = False
 
     def style_dict(self):
         base = FONT_SIZES.get(self.view.get("font", "中"), FONT_SIZES["中"])
-        return {**base, **{k: self.view[k] for k in base if k in self.view}, "grid": self.view.get("grid", True)}
+        return {**base, **{k: self.view[k] for k in base if k in self.view}, "grid": self.view.get("grid", True),
+                "suptitle_bold": self.view.get("suptitle_bold", True)}
 
     def edit_labels(self):
         self.tools.edit_labels(self.winfo_toplevel(), self.key, self.restyle)
@@ -415,6 +518,7 @@ class FigurePanel(tk.Frame):
             self.tools.apply()
         except Exception:
             pass
+        self.sync_title()
         self.canvas.relayout()
         self._home = {ax: (ax.get_xlim(), ax.get_ylim()) for ax in self.fig.axes}
         self.compute_need()

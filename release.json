@@ -1,15 +1,24 @@
 {
-  "version": "0.5.0",
+  "version": "0.5.1",
   "repo": "Yeep112/MagicTool",
   "branch": "main",
   "date": "2026-11-26",
   "notes": [
-    "支援 macOS：install.command 建立「Magic Tool.app」（應用程式 + 桌面），run_magic.command / publish.command 對應 Windows 的 .bat",
-    "Mac 自動尋找 Anaconda / Miniconda / python.org / Homebrew 的 Python；缺套件時可以自動安裝",
-    "Mac 的設定與紀錄放在 ~/Library/Application Support/MagicTool；快速鍵用 ⌘；觸控板捲動、中文字型、視窗大小都調整過",
-    "軟體內更新後自動補上 .command 的執行權限；發佈時自動把 .command / .sh 標記為可執行、固定 LF 換行"
+    "所有機台、所有圖：新增「圖標題」列，可以新增、修改、移除整張圖的標題，字體大小與粗體可以調",
+    "標題可以用 {日期}、{時間}、{機台}、{功能}、{檔名}，例如「{日期}的{機台}分析圖」→「20261126的Raman分析圖」",
+    "標題範圍：只有這張圖 / 這台機台全部 / 所有圖；存圖時預設檔名用標題"
   ],
   "history": [
+    {
+      "version": "0.5.0",
+      "date": "2026-11-26",
+      "notes": [
+        "支援 macOS：install.command 建立「Magic Tool.app」（應用程式 + 桌面），run_magic.command / publish.command 對應 Windows 的 .bat",
+        "Mac 自動尋找 Anaconda / Miniconda / python.org / Homebrew 的 Python；缺套件時可以自動安裝",
+        "Mac 的設定與紀錄放在 ~/Library/Application Support/MagicTool；快速鍵用 ⌘；觸控板捲動、中文字型、視窗大小都調整過",
+        "軟體內更新後自動補上 .command 的執行權限；發佈時自動把 .command / .sh 標記為可執行、固定 LF 換行"
+      ]
+    },
     {
       "version": "0.4.0",
       "date": "2026-11-26",

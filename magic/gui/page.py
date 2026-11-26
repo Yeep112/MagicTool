@@ -112,6 +112,9 @@ class Page:
         tools.save = self.app.save_state_soon
         tools.status = self.app.status
         self.right.redraw_request = self.redraw
+        tools.title_raw = lambda: self.title_effective(raw=True)[0]
+        tools.title_ctx = self.title_context
+        self.right.title_api = self
         self.post_draw = []                   # 畫完、套樣式之前的額外步驟（例如 Raman 的峰標註）
         if key == "Raman":
             self.post_draw.append(self._draw_peak_labels)
@@ -198,6 +201,7 @@ class Page:
         if a is None or a is self.current:
             return
         self.current = a
+        self.right.sync_title()
         self._show_params(a)
         self.remember(analysis=a.name)
         self.schedule_plot(0)
@@ -366,6 +370,80 @@ class Page:
         self.app.status(f"{a.name}：完成（計算 {seconds:.2f} 秒、繪圖 {draw_t:.2f} 秒）", "ok")
         self.app.timings.append((self.key, a.name, seconds, draw_t))
 
+    # ================================================================== 圖標題
+    def _ov(self):
+        return self.st.setdefault("fig", {}).setdefault(self.current.name if self.current else "", {})
+
+    def title_effective(self, raw=False):
+        """這張圖的標題 → (文字, 來自哪個範圍)。順序：這個功能 > 這台機台 > 所有圖；「-」= 這層設定成不顯示。"""
+        from .fig_tools import TITLE_SCOPES
+        for scope, v in zip(TITLE_SCOPES, (self._ov().get("suptitle", ""), self.st.get("fig_title", ""),
+                                           self.app.view.get("fig_title", ""))):
+            if v:
+                return ((v if raw else ("" if v == "-" else v)), scope)
+        return "", None
+
+    def title_set(self, scope, text):
+        """在 scope 設定標題；比它小的範圍（這個功能、這台機台）的設定會清掉，才看得到新的標題。"""
+        from .fig_tools import TITLE_SCOPES
+        ov = self._ov()
+        i = TITLE_SCOPES.index(scope) if scope in TITLE_SCOPES else 0
+        if i == 0:
+            if text:
+                ov["suptitle"] = text
+            else:
+                ov.pop("suptitle", None)
+        else:
+            ov.pop("suptitle", None)
+            if i == 1:
+                self.st["fig_title"] = text
+            else:
+                self.st.pop("fig_title", None)
+                if self.app.view.get("fig_title", "") != text:
+                    self.app.view["fig_title"] = text
+                    self.app.on_view_change()
+        self.app.save_state_soon()
+
+    def title_remove(self, scope):
+        """移除標題。回傳實際的範圍說明。"""
+        from .fig_tools import TITLE_SCOPES
+        ov = self._ov()
+        i = TITLE_SCOPES.index(scope) if scope in TITLE_SCOPES else 0
+        if i == 0:
+            ov["suptitle"] = "-"                 # 這張圖不顯示（就算其他範圍有標題）
+            msg = "只有這張圖"
+        elif i == 1:
+            ov.pop("suptitle", None)
+            self.st["fig_title"] = "-"
+            msg = f"{self.key} 的全部功能"
+        else:
+            ov.pop("suptitle", None)
+            self.st.pop("fig_title", None)
+            for p in self.app.pages.values():    # 所有機台、所有功能的標題都清掉
+                p.st.pop("fig_title", None)
+                for o in p.st.get("fig", {}).values():
+                    o.pop("suptitle", None)
+            self.app.view["fig_title"] = ""
+            self.app.on_view_change()
+            msg = "所有圖"
+        self.app.save_state_soon()
+        return msg
+
+    def title_context(self):
+        last = self.last
+        ctx = {"機台": self.key, "功能": self.current.name if self.current else ""}
+        if last and last.get("items"):
+            items = last["items"]
+            ctx["檔名"] = items[0].label if self.inst.source == "files" else \
+                f"{len(items[0].data.df)} 筆紀錄"
+        return ctx
+
+    def figure_title(self):
+        """存圖時的預設檔名用：展開後的標題（沒有就空白）。"""
+        from .fig_tools import expand_title
+        text, _ = self.title_effective()
+        return expand_title(text, self.title_context()) if text else ""
+
     def redraw(self):
         """用上一次算好的結果重畫（改了標註、圖例、標題時用，不重新計算）。"""
         last = self.last
@@ -407,7 +485,7 @@ class Page:
         d.mkdir(parents=True, exist_ok=True)
         fmt = self.app.settings.get("fig_format", "png")
         fp = filedialog.asksaveasfilename(parent=self.app.root, title="存圖", initialdir=str(d),
-                                          initialfile=f"{safe_name(self.current.name)}.{fmt}",
+                                          initialfile=f"{safe_name(self.figure_title() or self.current.name)}.{fmt}",
                                           defaultextension=f".{fmt}",
                                           filetypes=[("PNG", "*.png"), ("JPG", "*.jpg"), ("PDF", "*.pdf"),
                                                      ("SVG", "*.svg")])
