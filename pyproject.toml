@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "magictool"
+dynamic = ["version"]                      # 版本號只寫在 release.json（magic.__version__ 從那裡讀）
+description = "Magic Tool：PPMS、SQUID、Raman、Etching 實驗分析（介面 + Jupyter 共用）"
+requires-python = ">=3.9"
+dependencies = [
+    "numpy",
+    "scipy",
+    "pandas",
+    "matplotlib",
+    "openpyxl",
+]
+
+[project.optional-dependencies]
+gsheet = ["gspread", "google-auth"]        # 蝕刻紀錄同步到 Google Sheet 才需要
+notebook = ["jupyterlab", "ipykernel"]     # 只有用 notebooks\ 才需要；軟體本身不需要
+dev = ["pytest"]
+
+[tool.setuptools.dynamic]
+version = { attr = "magic.__version__" }
+
+[tool.setuptools.packages.find]            # 自動包含所有子套件（core、readers、ppms、gui…）
+include = ["magic*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

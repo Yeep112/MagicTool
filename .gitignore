@@ -1,0 +1,35 @@
+# ---- 這台電腦自己的東西（設定、紀錄、金鑰都在 %LOCALAPPDATA%\MagicTool，本來就不在這裡）----
+settings.toml
+gui_state.json
+service_account*.json
+*secret*
+_secrets/
+_backup/
+logs/
+.installed_commit
+
+# ---- 量測資料與分析結果：公開的 GitHub 不能放 ----
+Data/
+data/
+*輸出/
+*.dat
+*.db
+*.spe
+*.wdf
+*.sif
+*.h5
+*.hdf5
+*.xlsx
+*.xls
+*.csv
+*.txt
+!requirements*.txt
+
+# ---- Python / Jupyter ----
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.pytest_cache/
+*.egg-info/
+build/
+dist/

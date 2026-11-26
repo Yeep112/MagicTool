@@ -1,0 +1,16 @@
+{
+  "version": "0.1.0",
+  "repo": "Yeep112/MagicTool",
+  "branch": "main",
+  "date": "2026-11-26",
+  "notes": [
+    "第一版：PPMS、SQUID、Raman、Etching 四台機台整合成一個軟體",
+    "每台機台都有「快速檢視 / 參數萃取 / 批次比較」三種模式，參數面板依功能自動產生",
+    "PPMS / SQUID：自動分出降溫、升溫（ZFC / FC）段落；Tc 可選 onset、50%、10%、最大斜率",
+    "Raman：只在峰的範圍內找峰、Lorentzian 擬合求 FWHM；背景可用無峰區多項式、ALS 或指數",
+    "Etching：表單輸入先預覽、按確認才寫入，重複紀錄會提醒；比較用篩選取代寫死的列號",
+    "匯出結果會附一份 result.json（來源檔、參數、軟體版本），結果不會寫進原始資料夾",
+    "沿用 LowTempAnalysis 的發佈與自動更新；上傳前自動清掉 notebook 輸出並跑自我測試"
+  ],
+  "history": []
+}
