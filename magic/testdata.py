@@ -16,6 +16,8 @@ TRUTH = {
     "squid_Tc": 3.41, "squid_width": 0.03, "squid_Hc": 184.0,
     "raman_G": 1582.0, "raman_2D": 2680.0, "raman_G_fwhm": 14.0, "raman_2D_fwhm": 30.0, "raman_ratio": 3.0,
     "raman_hBN": 1366.0,
+    # 蝕刻 v2 範例：配方 A 的蝕刻率 r(w) = r_inf · (1 − exp(−w / w0))，電漿起始延遲 2 s
+    "etch_r_inf": 1.2, "etch_w0": 150.0, "etch_delay": 2.0, "etch_r_sio2": 0.05,
 }
 
 
@@ -161,6 +163,58 @@ def etching_csv(path):
     return path
 
 
+def etch_rate_A(width_nm):
+    return TRUTH["etch_r_inf"] * (1 - np.exp(-width_nm / TRUTH["etch_w0"]))
+
+
+def etching_csv_v2(path, seed=8):
+    """v2 格式的蝕刻紀錄（合成）：配方 A 有 4 種線寬 × 3 種時間（含分段）、一筆蝕穿；配方 B 兩種線寬。"""
+    from datetime import datetime, timedelta
+    from .etching.model import EtchInput, compute
+    from .etching.store import append_record, make_record
+    rng = np.random.default_rng(seed)
+    if os.path.exists(path):
+        os.remove(path)
+    t0 = datetime(2026, 11, 2, 9, 0, 0)
+    delay, rs = TRUTH["etch_delay"], TRUTH["etch_r_sio2"]
+    k = 0
+
+    def pts(v, sd=0.3, n=3):
+        return ", ".join(f"{x:.2f}" for x in v + rng.normal(0, sd, n))
+
+    def add(inp):
+        nonlocal k
+        rec = make_record(inp, compute(inp), when=t0 + timedelta(hours=6 * k), version="testdata")
+        append_record(rec, path)
+        k += 1
+    recipe_a = dict(instrument="ICP-RIE", gases=[("SF6", "40")], icp_power="100", rf_power="30", dc_bias="",
+                    pressure="10", pressure_unit="mTorr", resist="PMMA", resist_thickness="300", name="Tester",
+                    sample_type="pattern")
+    for w in (100, 200, 500, 2000):
+        for steps, tt in (("10", 10), ("20", 20), ("2x20", 40)):
+            r = etch_rate_A(w)
+            T = 80.0
+            d = r * (tt - delay)
+            dsio2 = rs * (tt - delay)
+            if w in (100, 500):          # 圖案內台階
+                add(EtchInput(material="hBN", line_width=str(w), steps=steps, sio2_method="afm_step",
+                              sio2_step=pts(dsio2, 0.2), mat_method="inside", mat_before=pts(T, 0.2), mat_step=pts(d),
+                              **recipe_a))
+            else:                        # 從基板量 + marker
+                add(EtchInput(material="hBN", line_width=str(w), steps=steps, sio2_method="marker",
+                              marker_before=pts(50.0, 0.2), marker_out=pts(50.0 + dsio2, 0.2), mat_method="outside",
+                              mat_before=pts(T, 0.2), mat_out=pts(T - d + dsio2), **recipe_a))
+    add(EtchInput(material="hBN", line_width="2000", steps="120", sio2_method="afm_step", sio2_step=pts(5.9, 0.2),
+                  mat_method="inside", mat_before=pts(80.0, 0.2), mat_step=pts(80.0, 0.2), **recipe_a))   # 蝕穿
+    recipe_b = dict(instrument="RIE", gases=[("CHF3", "50"), ("O2", "5")], rf_power="60", dc_bias="250",
+                    pressure="5", pressure_unit="Pa", resist="PMMA", name="Tester", sample_type="pattern")
+    for w, r in ((500, 0.30), (2000, 0.42)):
+        add(EtchInput(material="hBN", line_width=str(w), steps="60", sio2_method="ellipsometer",
+                      sio2_before=pts(285.0, 0.3), sio2_after=pts(285.0 - 0.15 * 58, 0.3), mat_method="inside",
+                      mat_before=pts(40.0, 0.2), mat_step=pts(r * 58), **recipe_b))
+    return path
+
+
 def _write(path, text):
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     with open(path, "w", encoding="utf-8", newline="\n") as f:
@@ -178,6 +232,7 @@ def write_all(folder):
         "raman_mono": raman(j(folder, "Raman", "synthetic_monolayer.txt"), "monolayer"),
         "raman_multi": raman(j(folder, "Raman", "synthetic_multilayer.txt"), "multilayer", seed=6, sep="\t"),
         "raman_hybrid": raman(j(folder, "Raman", "synthetic_hBN_graphene.csv"), "hybrid", seed=7, sep=","),
-        "etching": etching_csv(j(folder, "Etching", "etch_rate_log.csv")),
+        "etching": etching_csv_v2(j(folder, "Etching", "etch_rate_log.csv")),
+        "etching_v1": etching_csv(j(folder, "Etching", "etch_rate_log_v1_old.csv")),
     }
     return out

@@ -125,7 +125,8 @@ class SettingsDialog(tk.Toplevel):
         r = 0
         self._row_path(body, r, "紀錄 CSV", "etching.csv_path", et.get("csv_path", ""), folder=False, save=True,
                        filetypes=[("CSV", "*.csv")],
-                       hint=f"可以指向原本的 etch_rate_log.csv（欄位相同）。空白 = {S.etching_csv({})}")
+                       hint=f"可以指向原本的 etch_rate_log.csv：舊格式會在第一次寫入前先備份、再把新欄位加在最後面。"
+                            f"空白 = {S.etching_csv({})}")
         r += 2
         xv = tk.BooleanVar(value=bool(et.get("xlsx_mirror")))
         ttk.Checkbutton(body, text="每次寫入也更新同名的 .xlsx", variable=xv, style="Neutral.TCheckbutton").grid(

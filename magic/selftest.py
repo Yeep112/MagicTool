@@ -124,6 +124,23 @@ def check_analyses(paths):
     assert not np.isfinite(t["hBN 位置 (cm⁻¹)"].iloc[0]) or "最大值" not in str(t["hBN 方法"].iloc[0]), \
         "沒有 hBN 的光譜不應該找到 hBN"
     out.append(f"2D/G {t['I(2D)/I(G) 高度比'].iloc[0]:.2f}")
+    # 蝕刻：多個時間線性擬合 → 斜率 = 蝕刻率、截距 → 起始延遲；蝕穿的那筆要排除
+    from .testdata import etch_rate_A
+    _, res = run("Etching", "多時間線性擬合", [paths["etching"]])
+    t = res.tables["time_fit"]
+    assert len(t) == 4, f"應該有 4 個線寬各一條擬合，得到 {len(t)}"
+    for _, row in t.iterrows():
+        truth = etch_rate_A(row["線寬 (nm)"])
+        assert abs(row["蝕刻率 (nm/s)"] - truth) < max(0.03, 3 * row["σ 蝕刻率"]), \
+            f"線寬 {row['線寬 (nm)']:g} nm：擬合 {row['蝕刻率 (nm/s)']:.3f}，正確 {truth:.3f}"
+        _near(row["起始延遲 (s)"], TRUTH["etch_delay"], 1.0, "起始延遲")
+    assert t["排除（蝕穿）"].sum() == 1, "蝕穿的紀錄要被排除"
+    rates = list(t.sort_values("線寬 (nm)")["蝕刻率 (nm/s)"])
+    assert rates == sorted(rates), "線寬越小蝕刻率應該越低"
+    out.append(f"蝕刻率 {rates[-1]:.3f} nm/s（2 µm）")
+    _, res = run("Etching", "線寬比較", [paths["etching"]])
+    t = res.tables["linewidth"]
+    assert t["配方"].nunique() == 2 and not t["含蝕穿（下限）"].any(), t
     # 其他功能：能算、能畫
     others = [("PPMS", "曲線檢視", [paths["ppms"], paths["ppms2"]], {}),
               ("PPMS", "多樣品 R–T 比較", [paths["ppms"], paths["ppms2"]], {}),
@@ -133,13 +150,15 @@ def check_analyses(paths):
               ("Raman", "背景扣除", [paths["raman_multi"]], {}),
               ("Raman", "多檔峰值總表", [paths["raman_mono"], paths["raman_multi"], paths["raman_hybrid"]], {}),
               ("Etching", "蝕刻速率趨勢", [paths["etching"]], {"x": "日期", "y": "兩個都畫"}),
-              ("Etching", "條件比較（平均 ± 標準差）", [paths["etching"]], {})]
+              ("Etching", "條件比較（平均 ± 標準差）", [paths["etching"]], {}),
+              ("Etching", "蝕刻速率趨勢", [paths["etching_v1"]], {"x": "日期", "y": "材料蝕刻率"}),
+              ("Etching", "線寬比較", [paths["etching"]], {"log_x": True, "normalize": True})]
     for inst, name, src, kw in others:
         fig, res = run(inst, name, src, **kw)
         assert fig.axes, f"{inst}「{name}」沒有畫出任何圖"
     from .core.registry import load_analyses
     n_all = sum(len(v) for v in load_analyses().values())
-    tested = {"R–T 與 Tc", "M–T 與 Tc", "M–H 迴線", "石墨烯 G / 2D 峰"} | {o[1] for o in others}
+    tested = {"R–T 與 Tc", "M–T 與 Tc", "M–H 迴線", "石墨烯 G / 2D 峰", "多時間線性擬合"} | {o[1] for o in others}
     missing = [f"{k}:{a.name}" for k, v in load_analyses().items() for a in v if a.name not in tested]
     if missing:
         raise AssertionError(f"這些功能還沒有測試：{missing}")
@@ -147,32 +166,145 @@ def check_analyses(paths):
 
 
 def check_etching(paths):
-    from .etching.calc import EtchInputError, compute_rates, make_row
-    from .etching.store import append_csv, find_duplicates, read_log
-    r = compute_rates(122.8, 92.7, 30, marker_before=59.3, marker_after=59.3)
-    _near(r["R_hBN"], 30.1 / 30, 1e-9, "R_hBN")
-    assert r["reference"] == "marker"
-    r = compute_rates(100, 80, 20, sio2_before=50, sio2_after=48, reference="SiO2")
-    assert r["delta_SiO2"] == 2 and r["delta_marker"] == 2, "Δ_SiO2 與計算用的正負號要一致"
-    _near(r["R_hBN"], 22 / 20, 1e-9, "R_hBN（SiO2 參考）")
+    import math
+    import pandas as pd
+    from .etching import store
+    from .etching.model import (EtchInput, EtchInputError, compute, parse_length_nm, parse_pressure_pa,
+                                parse_steps, parse_values)
+    out = []
+    # --- 讀輸入的小工具 ---
+    assert parse_steps("20+20+20") == [20, 20, 20] and parse_steps("3x20") == [20, 20, 20]
+    assert parse_steps("1.5min") == [90] and parse_steps("10, 20") == [10, 20], parse_steps("10, 20")
+    _near(parse_pressure_pa("10", "mTorr"), 1.3332, 1e-3, "10 mTorr → Pa")
+    _near(parse_length_nm("0.5um"), 500, 1e-9, "0.5 um → nm")
+    m = parse_values("100, 101, 99")
+    assert m.n == 3 and abs(m.mean - 100) < 1e-12 and abs(m.std - 1) < 1e-12, (m.mean, m.std)
+    for bad in ("abc", "1, x"):
+        try:
+            parse_values(bad, "測試")
+            raise AssertionError(f"「{bad}」應該要看不懂")
+        except EtchInputError:
+            pass
+    # --- marker 量 SiO2 + 從基板量材料：d_SiO2 = H_m,out − T'_m，d = T + d_SiO2 − H_out ---
+    base = dict(material="hBN", steps="20+20", sio2_method="marker", marker_before="50",
+                marker_out="55", mat_method="outside", mat_before="100", mat_out="40")
+    r = compute(EtchInput(**base))
+    _near(r.d_sio2, 5, 1e-9, "d_SiO2（marker）")
+    _near(r.d_mat, 65, 1e-9, "d_材料（從基板量）")
+    _near(r.r_mat, 65 / 40, 1e-9, "r_材料（分段時間加總）")
+    _near(r.r_sio2, 5 / 40, 1e-9, "r_SiO2")
+    _near(r.selectivity, 13, 1e-9, "選擇比")
+    assert not r.through and r.t_steps == [20, 20]
+    # 有量 T'_m：用量到的值
+    r = compute(EtchInput(**{**base, "marker_after_own": "49"}))
+    _near(r.d_sio2, 6, 1e-9, "d_SiO2（有 T'_m）")
+    _near(r.marker_etched, 1, 1e-9, "marker 被蝕刻量")
+    # --- 多點平均與誤差傳遞 σ_d = √(Σσ²)、σ_r = σ_d / t ---
+    r = compute(EtchInput(**{**base, "mat_before": "99, 100, 101", "mat_out": "39, 40, 41", "marker_out": "54, 55, 56"}))
+    _near(r.d_mat, 65, 1e-9, "多點平均 d")
+    _near(r.s_mat, math.sqrt(3), 1e-9, "σ_d 誤差傳遞")
+    _near(r.sr_mat, math.sqrt(3) / 40, 1e-9, "σ_r")
+    # --- AFM 台階 / 橢偏儀 + 圖案內台階 ---
+    r = compute(EtchInput(material="WSe2", steps="30", sio2_method="afm_step", sio2_step="3",
+                          mat_method="inside", mat_before="50", mat_step="30"))
+    _near(r.r_mat, 1.0, 1e-9, "r（圖案內台階）")
+    _near(r.remaining, 20, 1e-9, "剩下厚度")
+    r = compute(EtchInput(steps="30", sio2_method="ellipsometer", sio2_before="300", sio2_after="297",
+                          mat_method="inside", mat_step="30"))
+    _near(r.r_sio2, 0.1, 1e-9, "r_SiO2（橢偏儀）")
+    assert any("無法判斷" in w for w in r.warnings), "沒有 T 時要提醒無法判斷蝕穿"
+    # --- 從基板量但沒有量 SiO2 → 要說明 ---
     try:
-        compute_rates(100, 80, 20, reference="marker")
-        raise AssertionError("沒填 marker 應該要說明")
+        compute(EtchInput(**{**base, "sio2_method": "none"}))
+        raise AssertionError("從基板量卻沒有 SiO2 深度，應該要說明")
     except EtchInputError as e:
-        assert "marker" in str(e)
-    r = compute_rates(100, 80, 20, marker_before=50, marker_after=49.5)
-    assert r["delta_marker"] == 0 and r["warnings"], "負值要視為 0 並提醒"
-    df = read_log(paths["etching"])
-    row = make_row(compute_rates(122.8, 92.7, 30, marker_before=59.3, marker_after=59.3),
-                   hbn_before=122.8, hbn_after=92.7, t=30, marker_before=59.3, marker_after=59.3,
-                   method="ICP", power="60W", bias="5V", pressure="1Pa", sample_type="direct", name="Tester", gas="SF6")
-    assert find_duplicates(df, row) == [1], find_duplicates(df, row)
-    tmp = os.path.join(os.path.dirname(paths["etching"]), "_new.csv")
-    append_csv(row, tmp)
-    append_csv(row, tmp)
-    assert len(read_log(tmp)) == 2
+        assert "SiO2" in str(e)
+    # --- 蝕穿：剩下 ≤ 0.5 nm → 下限 r ≥ T / t ---
+    r = compute(EtchInput(**{**base, "mat_out": "5.2"}))
+    assert r.through and r.lower_bound, "應該判斷為蝕穿"
+    _near(r.r_mat, 100 / 40, 1e-9, "蝕穿時的下限 T / t")
+    out.append("算式、分段時間、誤差傳遞、蝕穿")
+    # --- 新格式 CSV：寫入、讀回、重複 ---
+    folder = os.path.dirname(paths["etching"])
+    inp = EtchInput(**{**base, "icp_power": "100", "rf_power": "30",
+                       "gases": [("SF6", "40"), ("O2", "5")], "line_width": "0.5um"})
+    rec = store.make_record(inp, compute(inp), version="selftest")
+    assert set(rec) <= set(store.HEADERS), f"紀錄有表頭沒有的欄位：{set(rec) - set(store.HEADERS)}"
+    _near(float(rec["R_hBN(nm/sec)"]), 65 / 40, 1e-9, "舊欄位 R_hBN")
+    _near(float(rec["Δ_hBN (nm)"]) + float(rec["Δ_marker (nm)"]), 65, 1e-9, "舊公式 R = (Δ_hBN + Δ_marker)/t 仍成立")
+    assert rec["Gas"] == "SF6+O2" and rec["Power"].startswith("ICP 100"), (rec["Gas"], rec["Power"])
+    tmp = os.path.join(folder, "_new.csv")
+    store.append_record(rec, tmp)
+    df = store.read_log(tmp)
+    assert store.file_schema(tmp) == "v2" and len(df) == 1
+    _near(df["Line width (nm)"].iloc[0], 500, 1e-9, "線寬存檔")
+    assert store.find_duplicates(df, rec) == [1], store.find_duplicates(df, rec)
+    inp2 = EtchInput(**{**inp.__dict__, "notes": "另一個備註", "name": "別人"})
+    assert store.find_duplicates(df, store.make_record(inp2, compute(inp2))) == [1], "只改備註、名字仍算重複"
+    inp3 = EtchInput(**{**inp.__dict__, "mat_out": "41"})
+    assert store.find_duplicates(df, store.make_record(inp3, compute(inp3))) == [], "量測值不同不算重複"
     os.remove(tmp)
-    return "正負號、缺值、負值、重複"
+    # --- 舊格式（v1）：不能直接寫，要先備份再升級；舊值不變 ---
+    v1 = paths["etching_v1"]
+    old = pd.read_csv(v1, dtype=str, keep_default_na=False)
+    assert store.file_schema(v1) == "v1"
+    try:
+        store.append_record(rec, v1)
+        raise AssertionError("舊格式不應該直接寫入")
+    except store.NeedsUpgrade:
+        pass
+    legacy = store.read_log(v1)
+    assert len(legacy) == len(old) and (legacy["Schema"].astype(str) == "1").all()
+    i = 0
+    d_old = float(old["Δ_hBN (nm)"].iloc[i]) + float(old["Δ_marker (nm)"].iloc[i])
+    _near(legacy["d_material (nm)"].iloc[i], d_old, 1e-9, "舊紀錄換算的 d_材料")
+    backup = store.upgrade_file(v1)
+    assert os.path.exists(backup) and store.file_schema(v1) == "v2"
+    new = pd.read_csv(v1, dtype=str, keep_default_na=False)
+    for c in old.columns:
+        assert (new[c] == old[c]).all(), f"升級後舊欄位「{c}」被改到"
+    store.append_record(rec, v1)
+    assert len(store.read_log(v1)) == len(old) + 1
+    out.append(f"舊格式備份並升級（{len(old)} 筆不變）")
+    # --- Google Sheet 表頭（用假的工作表測，不連網路） ---
+
+    class FakeWS:
+        def __init__(self, rows):
+            self.rows = [list(r) for r in rows]
+
+        def row_values(self, i):
+            return self.rows[i - 1] if len(self.rows) >= i else []
+
+        def get_all_values(self):
+            return self.rows
+
+        def update(self, range_name="A1", values=None, **kw):
+            assert range_name == "A1"
+            if self.rows:
+                self.rows[0] = list(values[0])
+            else:
+                self.rows.append(list(values[0]))
+
+        def append_row(self, row, **kw):
+            self.rows.append(list(row))
+
+    ws = FakeWS([])
+    assert store.ensure_sheet_header(ws) == "new" and ws.rows[0] == store.HEADERS
+    ws = FakeWS([store.V1, ["x"] * len(store.V1)])
+    assert store.ensure_sheet_header(ws) == "upgraded" and ws.rows[0] == store.HEADERS
+    assert store.ensure_sheet_header(ws) == "ok"
+    store.gsheet_append(rec, "k", "sa.json", ws=ws)
+    assert len(ws.rows) == 3 and ws.rows[2][store.HEADERS.index("Material")] == "hBN"
+    back = store.gsheet_read("k", "sa.json", ws=ws)
+    assert len(back) == 2 and back["Material"].iloc[1] == "hBN" and back["Schema"].iloc[0] == "1", back
+    _near(back["R_hBN(nm/sec)"].iloc[1], 65 / 40, 1e-9, "從 Google Sheet 讀回的 R")
+    try:
+        store.ensure_sheet_header(FakeWS([["A", "B"]]))
+        raise AssertionError("看不懂的表頭應該要停下來")
+    except store.SheetError:
+        pass
+    out.append("Google Sheet 表頭（模擬）")
+    return "；".join(out)
 
 
 def check_settings_and_tools(tmp):
@@ -360,19 +492,44 @@ def run_gui(rep, timeout=90):
         dlg = SettingsDialog(app)
         pump(lambda: False, 0.3)
         dlg.save()
-        # 新增蝕刻紀錄的流程（寫到暫存的 CSV）
+        # 新增蝕刻紀錄（精靈）：填值 → 預覽 → 動畫不卡 → 寫入暫存的 CSV
         ep = app.pages["Etching"]
         app.segment.select("Etching")
-        from .gui.records_panel import EtchForm
-        form = EtchForm(ep.data)
-        for k, v in dict(hbn_before="100", hbn_after="70", marker_before="40", marker_after="40.5", t="30",
-                         method="ICP", power="80W", gas="SF6", name="selftest").items():
-            form.vars[k].set(v)
-        root.update()
-        assert "R_hBN" in form.preview.cget("text"), form.preview.cget("text")
-        form.save()
-        pump(lambda: ep.data.df is not None and len(ep.data.df) == 1 and ep.data.source_var.get() == "本機 CSV", 10)
-        assert ep.data.df is not None and len(ep.data.df) == 1, "新增的紀錄沒有出現在表格"
+        from .etching import store as _store
+        local = ep.data.csv_path()
+        n0 = len(_store.read_log(local)) if os.path.exists(local) else 0      # 寫入後表格會切到本機 CSV
+        wz = ep.data.new_record()
+        for k, v in dict(material="hBN", line_width="200", icp_power="100", rf_power="30", pressure="10",
+                         steps="3x20", mat_before="80.1, 79.9, 80.3", mat_out="45.2, 45.8, 45.0",
+                         marker_before="50.2 50.0", marker_out="53.1, 52.9", name="selftest").items():
+            wz.vars[k].set(v)
+        wz.vars["pressure_unit"].set("mTorr")
+        wz.gas_vars[0][1].set("40")
+        assert pump(lambda: wz.result is not None, 5), f"精靈沒有算出結果：{wz.small.cget('text')}"
+        # d_SiO2 = 53.0 − 50.1 = 2.9；d = 80.1 + 2.9 − 45.333 = 37.667；t = 60
+        _near(wz.result.r_mat, (80.1 + 2.9 - 136.0 / 3) / 60, 1e-6, "精靈算出的 r_hBN")
+        assert "nm/s" in wz.big.cget("text"), wz.big.cget("text")
+        for i in range(7):
+            wz.select_stage(i)
+            root.update()
+        wz.focus_field("mat_out")
+        pump(lambda: False, 0.5)              # 讓切換頁面時排隊的重畫先做完，只量動畫本身
+        frame = []
+        wz.play_etch()
+        t0 = last_t = time.perf_counter()
+        while wz._anim is not None and time.perf_counter() - t0 < 15:
+            root.update()
+            now = time.perf_counter()
+            frame.append(now - last_t)
+            last_t = now
+            time.sleep(0.002)
+        assert wz._anim is None, "蝕刻動畫沒有結束"
+        wz.save()
+        assert pump(lambda: ep.data.df is not None and len(ep.data.df) == n0 + 1
+                    and ep.data.source_var.get() == "本機 CSV", 10), "新增的紀錄沒有出現在表格"
+        last_row = ep.data.df.iloc[-1]
+        assert last_row["Material"] == "hBN" and abs(last_row["Line width (nm)"] - 200) < 1e-9, last_row
+        stats["anim_gap"] = max(frame)
         stats.update(results=results, switch_ms=switch_ms, switch_total=switch_total, bg_gaps=bg_gaps,
                      timings=list(app.timings), fixed_ok=fixed_ok)
         app.close()
@@ -394,10 +551,13 @@ def run_gui(rep, timeout=90):
             raise AssertionError(f"切換機台最慢 {sw[-1]:.0f} ms（> 150 ms）")
         if max_gap > 0.6:
             raise AssertionError(f"背景計算時畫面最多卡住 {max_gap * 1000:.0f} ms（> 600 ms）")
+        if stats.get("anim_gap", 0) > 0.1:
+            raise AssertionError(f"蝕刻動畫最多卡住 {stats['anim_gap'] * 1000:.0f} ms（> 100 ms）")
         if not stats["fixed_ok"]:
             raise AssertionError("固定大小時圖被壓縮或沒有出現捲軸")
         return (f"切換機台 中位數 {sw[len(sw) // 2]:.1f} ms、最慢 {sw[-1]:.1f} ms；"
-                f"背景計算時畫面最長停頓 {max_gap * 1000:.0f} ms；單張圖最久繪製 {worst_draw * 1000:.0f} ms")
+                f"背景計算時畫面最長停頓 {max_gap * 1000:.0f} ms；單張圖最久繪製 {worst_draw * 1000:.0f} ms；"
+                f"蝕刻動畫最長一格 {stats.get('anim_gap', 0) * 1000:.0f} ms")
     rep.check("介面流暢度", perf)
 
 

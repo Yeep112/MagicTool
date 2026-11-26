@@ -1,4 +1,7 @@
-"""中欄上方（Etching）：蝕刻紀錄表 ＋「新增紀錄」表單（先預覽、按確認才寫入、重複會提醒）。"""
+"""中欄上方（Etching）：蝕刻紀錄表 ＋「新增紀錄」精靈（etch_wizard：流程示意圖、量法、即時結果）。
+
+舊格式（v1，20 欄）的紀錄會顯示提示列，可以先升級（會先備份）；或第一次寫入新紀錄時再升級。
+"""
 from __future__ import annotations
 
 import os
@@ -7,14 +10,14 @@ from tkinter import filedialog, messagebox, ttk
 
 from ..core import settings as S
 from ..etching import store
-from ..etching.calc import EtchInputError, REFERENCES, compute_rates, make_row
 from . import theme as T
 from .widgets import Chip, section_title
 
-COLS = [("#", "#", 40, "e"), ("DateTime", "日期", 130, "w"), ("Method", "Method", 60, "w"),
-        ("Power", "Power", 56, "w"), ("Bias", "Bias", 46, "w"), ("Pressure", "Pressure", 64, "w"),
-        ("Gas", "Gas", 52, "w"), ("Type", "Type", 60, "w"), ("Name", "Name", 70, "w"),
-        ("T (sec)", "T (s)", 50, "e"), ("R_hBN(nm/sec)", "R_hBN", 70, "e"), ("R_SiO2(nm/sec)", "R_SiO2", 70, "e")]
+COLS = [("#", "#", 40, "e"), ("DateTime", "日期", 128, "w"), ("Material", "材料", 56, "w"),
+        ("Method", "機台", 62, "w"), ("Gas", "氣體", 70, "w"), ("Power", "功率", 110, "w"),
+        ("Pressure", "壓力", 62, "w"), ("Line width (nm)", "線寬", 52, "e"), ("Etch steps (s)", "時間 (s)", 66, "e"),
+        ("R_hBN(nm/sec)", "R_材料", 64, "e"), ("σ R_material (nm/sec)", "±", 46, "e"),
+        ("R_SiO2(nm/sec)", "R_SiO2", 64, "e"), ("Etched through", "蝕穿", 40, "center"), ("Name", "操作者", 64, "w")]
 SOURCES = ["本機 CSV", "Google Sheet", "範例資料（唯讀）"]
 
 
@@ -41,13 +44,20 @@ class RecordsPanel(tk.Frame):
         ttk.Button(bar, text="＋ 新增紀錄", style=f"{key}.Accent.TButton", command=self.new_record).pack(side="left")
         ttk.Button(bar, text="↻", width=3, style=f"{key}.Small.TButton", command=self.reload).pack(side="left", padx=(6, 0))
         self.source_var = tk.StringVar(value=SOURCES[0])
-        cb = ttk.Combobox(bar, textvariable=self.source_var, values=SOURCES, state="readonly", width=12)
+        cb = ttk.Combobox(bar, textvariable=self.source_var, values=SOURCES, state="readonly", width=10)
         cb.pack(side="left", padx=(6, 0))
         cb.bind("<<ComboboxSelected>>", lambda e: self.reload())
         ttk.Button(bar, text="匯出 Excel", style=f"{key}.Small.TButton", command=self.export_xlsx).pack(side="right")
+        ttk.Button(bar, text="複製條件", style=f"{key}.Small.TButton", command=self.new_from_selected).pack(
+            side="right", padx=(0, 6))
 
         self.path_lab = tk.Label(self, text="", bg=T.CHIP, fg=T.MUTED, font=T.font(9), anchor="w", padx=8, pady=3)
         self.path_lab.pack(fill="x", pady=(0, 4))
+        self.banner = tk.Frame(self, bg="#fef3c7", padx=8, pady=4)
+        self.banner_lab = tk.Label(self.banner, text="", bg="#fef3c7", fg="#92400e", font=T.font(9), anchor="w",
+                                   justify="left", wraplength=T.px(330))
+        self.banner_lab.pack(side="left", fill="x", expand=True)
+        ttk.Button(self.banner, text="備份並升級", style=f"{key}.Small.TButton", command=self.upgrade).pack(side="right")
 
         ff = tk.Frame(self, bg=T.CARD)
         ff.pack(fill="x", pady=(0, 4))
@@ -114,9 +124,10 @@ class RecordsPanel(tk.Frame):
                     df = store.gsheet_read(et.get("gsheet_key", ""), S.service_account_path(settings),
                                            et.get("gsheet_worksheet", ""))
                 elif src == SOURCES[2]:
-                    if not demo.exists():
-                        from ..testdata import etching_csv
-                        etching_csv(str(demo))
+                    from ..etching.store import file_schema
+                    if file_schema(demo) != "v2":
+                        from ..testdata import etching_csv_v2
+                        etching_csv_v2(str(demo))
                     df = store.read_log(demo)
                 else:
                     df = store.read_log(self.csv_path())
@@ -135,12 +146,34 @@ class RecordsPanel(tk.Frame):
             self.populate()
             return
         self.df = df
+        self._update_banner()
         self.populate()
         if select_last and len(df):
             last = str(int(df["#"].iloc[-1]))
             if self.tree.exists(last):
                 self.tree.selection_set([last])
                 self.tree.see(last)
+
+    def _update_banner(self):
+        v1 = self.source_var.get() == SOURCES[0] and store.file_schema(self.csv_path()) == "v1"
+        if v1:
+            self.banner_lab.configure(text="這份紀錄是舊格式（20 欄）。可以照常檢視；寫入新紀錄前會先備份、"
+                                           "再把新欄位加在最後面（舊欄位與 Google Sheet 對應不變）。")
+            self.banner.pack(fill="x", pady=(0, 4), after=self.path_lab)
+        else:
+            self.banner.pack_forget()
+
+    def upgrade(self):
+        path = self.csv_path()
+        if not messagebox.askyesno("升級紀錄檔", f"先備份，再把新欄位加在最後面？\n\n{path}", parent=self):
+            return
+        try:
+            backup = store.upgrade_file(path)
+        except OSError as e:
+            messagebox.showerror("升級紀錄檔", f"失敗（檔案是不是被 Excel 開著？）：{e}", parent=self)
+            return
+        self.app.status(f"已升級；舊檔備份在 {backup}", "ok", open_path=os.path.dirname(str(path)))
+        self.reload()
 
     def filtered(self):
         if self.df is None:
@@ -165,8 +198,10 @@ class RecordsPanel(tk.Frame):
             vals = []
             for c, *_ in COLS:
                 v = r.get(c, "")
-                if isinstance(v, float):
-                    v = "" if v != v else (f"{v:.4g}" if "R_" in c else f"{v:g}")
+                if c == "Etched through":
+                    v = "▲" if bool(v) else ""
+                elif isinstance(v, float):
+                    v = "" if v != v else (f"{v:.4g}" if ("R_" in c or "σ" in c) else f"{v:g}")
                 vals.append(v)
             self.tree.insert("", "end", iid=str(int(r["#"])), values=vals)
         sel = [i for i in keep if self.tree.exists(i)]
@@ -195,8 +230,20 @@ class RecordsPanel(tk.Frame):
         return (self._gen, self.filter_var.get(), tuple(self.tree.selection()))
 
     # ------------------------------------------------------------------ 新增 / 匯出
-    def new_record(self):
-        EtchForm(self)
+    def new_record(self, prefill=None):
+        from .etch_wizard import EtchWizard
+        return EtchWizard(self, prefill)
+
+    def new_from_selected(self):
+        """以選取的那一筆的條件（材料、機台、氣體、功率…）開新紀錄，量測值留空。"""
+        from .etch_wizard import prefill_from_record
+        sel = self.tree.selection()
+        if not sel or self.df is None:
+            messagebox.showinfo("複製條件", "先在表格選一筆紀錄：會用它的材料、機台、氣體、功率、時間開一筆新紀錄（量測值留空）",
+                                parent=self)
+            return
+        row = self.df[self.df["#"] == int(sel[0])].iloc[0].to_dict()
+        return self.new_record(prefill_from_record(row))
 
     def export_xlsx(self):
         df = self.filtered()
@@ -212,178 +259,3 @@ class RecordsPanel(tk.Frame):
             self.app.status(f"已匯出 {len(df)} 筆到 {fp}", "ok")
         except Exception as e:
             messagebox.showerror("匯出 Excel", f"匯出失敗：{e}", parent=self)
-
-
-FIELDS = [
-    ("method", "Method", "ICP"), ("power", "Power", "60W"), ("bias", "Bias", "5V"), ("pressure", "Pressure", "1Pa"),
-    ("gas", "Gas", "SF6"), ("sample_type", "Type", "direct"), ("name", "Name", ""), ("t", "蝕刻時間 T (sec)", "30"),
-]
-HEIGHTS = [("hbn_before", "hBN 蝕刻前 (nm)"), ("hbn_after", "hBN 蝕刻後 (nm)"),
-           ("marker_before", "marker 蝕刻前 (nm)"), ("marker_after", "marker 蝕刻後 (nm)"),
-           ("sio2_before", "SiO2 蝕刻前 (nm)"), ("sio2_after", "SiO2 蝕刻後 (nm)")]
-
-
-class EtchForm(tk.Toplevel):
-    """新增一筆蝕刻紀錄。輸入時即時顯示算出的速率；按「寫入」才存檔。"""
-
-    def __init__(self, panel):
-        super().__init__(panel)
-        self.panel = panel
-        self.app = panel.app
-        key = panel.key
-        self.title("新增蝕刻紀錄")
-        self.configure(bg=T.CARD)
-        self.transient(panel.winfo_toplevel())
-        a = T.accent(key)
-        head = tk.Frame(self, bg=a["main"], padx=16, pady=10)
-        head.pack(fill="x")
-        tk.Label(head, text="新增蝕刻紀錄", bg=a["main"], fg="white", font=T.font(13, "bold")).pack(anchor="w")
-        tk.Label(head, text="輸入 AFM 量到的高度；下方會即時算出速率，按「寫入」才會存檔", bg=a["main"],
-                 fg=T.mix_color("#ffffff", a["main"], 0.25), font=T.font(9)).pack(anchor="w")
-        body = tk.Frame(self, bg=T.CARD, padx=16, pady=10)
-        body.pack(fill="both", expand=True)
-        last = self.app.state.setdefault("etch_last", {})
-        df = panel.df
-        self.vars = {}
-        tk.Label(body, text="條件", bg=T.CARD, fg=T.FAINT, font=T.font(9, "bold")).grid(row=0, column=0, sticky="w")
-        for i, (k, label, default) in enumerate(FIELDS):
-            r, c = 1 + i // 2, (i % 2) * 2
-            tk.Label(body, text=label, bg=T.CARD, fg=T.TEXT, font=T.font(9)).grid(row=r, column=c, sticky="w",
-                                                                                  padx=(0 if c == 0 else 14, 6), pady=3)
-            var = tk.StringVar(value=str(last.get(k, default)))
-            hist_col = {"method": "Method", "power": "Power", "bias": "Bias", "pressure": "Pressure", "gas": "Gas",
-                        "sample_type": "Type", "name": "Name"}.get(k)
-            if hist_col and df is not None and hist_col in df.columns:
-                values = [v for v in dict.fromkeys(df[hist_col].astype(str)) if v.strip()][-30:]
-                w = ttk.Combobox(body, textvariable=var, values=values, width=14)
-            else:
-                w = ttk.Entry(body, textvariable=var, width=16)
-            w.grid(row=r, column=c + 1, sticky="ew", pady=3)
-            self.vars[k] = var
-        base = 2 + len(FIELDS) // 2
-        tk.Label(body, text="高度（AFM）", bg=T.CARD, fg=T.FAINT, font=T.font(9, "bold")).grid(
-            row=base, column=0, sticky="w", pady=(10, 0))
-        for i, (k, label) in enumerate(HEIGHTS):
-            r, c = base + 1 + i // 2, (i % 2) * 2
-            tk.Label(body, text=label, bg=T.CARD, fg=T.TEXT, font=T.font(9)).grid(row=r, column=c, sticky="w",
-                                                                                  padx=(0 if c == 0 else 14, 6), pady=3)
-            var = tk.StringVar(value="")
-            ttk.Entry(body, textvariable=var, width=16).grid(row=r, column=c + 1, sticky="ew", pady=3)
-            self.vars[k] = var
-        rr = base + 1 + len(HEIGHTS) // 2
-        tk.Label(body, text="參考層", bg=T.CARD, fg=T.TEXT, font=T.font(9)).grid(row=rr, column=0, sticky="w", pady=(8, 0))
-        self.ref_var = tk.StringVar(value=last.get("reference", "auto"))
-        rf = tk.Frame(body, bg=T.CARD)
-        rf.grid(row=rr, column=1, columnspan=3, sticky="w", pady=(8, 0))
-        for ref, text in zip(REFERENCES, ["自動（有 marker 用 marker）", "marker", "SiO2"]):
-            ttk.Radiobutton(rf, text=text, value=ref, variable=self.ref_var,
-                            style=f"{key}.TRadiobutton").pack(side="left", padx=(0, 10))
-        self.preview = tk.Label(body, text="", bg=T.SUBTLE, fg=T.TEXT, font=T.font(10), justify="left", anchor="w",
-                                padx=10, pady=8, wraplength=T.px(520))
-        self.preview.grid(row=rr + 1, column=0, columnspan=4, sticky="ew", pady=(12, 0))
-        body.columnconfigure(1, weight=1)
-        body.columnconfigure(3, weight=1)
-        bf = tk.Frame(self, bg=T.CARD, padx=16, pady=10)
-        bf.pack(fill="x")
-        self.keep_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(bf, text="寫入後繼續新增下一筆", variable=self.keep_var,
-                        style=f"{key}.TCheckbutton").pack(side="left")
-        self.ok_btn = ttk.Button(bf, text="寫入紀錄", style=f"{key}.Accent.TButton", command=self.save)
-        self.ok_btn.pack(side="right")
-        ttk.Button(bf, text="取消", style=f"{key}.Ghost.TButton", command=self.destroy).pack(side="right", padx=6)
-        for v in list(self.vars.values()) + [self.ref_var]:
-            v.trace_add("write", lambda *a: self.update_preview())
-        self.bind("<Escape>", lambda e: self.destroy())
-        self.update_preview()
-        self.update_idletasks()
-        try:
-            root = panel.winfo_toplevel()
-            x = root.winfo_rootx() + (root.winfo_width() - self.winfo_reqwidth()) // 2
-            y = root.winfo_rooty() + 80
-            self.geometry(f"+{max(x, 0)}+{max(y, 0)}")
-        except Exception:
-            pass
-        self.grab_set()
-
-    def _inputs(self):
-        v = {k: var.get().strip() for k, var in self.vars.items()}
-        return v
-
-    def _compute(self):
-        v = self._inputs()
-        return v, compute_rates(v["hbn_before"], v["hbn_after"], v["t"], v["marker_before"] or None,
-                                v["marker_after"] or None, v["sio2_before"] or None, v["sio2_after"] or None,
-                                reference=self.ref_var.get())
-
-    def update_preview(self):
-        try:
-            v, r = self._compute()
-        except EtchInputError as e:
-            self.preview.configure(text=f"還不能寫入：{e}", fg=T.MUTED)
-            self.ok_btn.state(["disabled"])
-            return
-        lines = [f"R_hBN = {r['R_hBN']:.4g} nm/sec　　R_SiO2 = {r['R_SiO2']:.4g} nm/sec　（參考：{r['reference']}）",
-                 f"Δ_hBN = {r['delta_hBN']:.4g} nm、參考層被蝕刻 {r['delta_marker']:.4g} nm"]
-        lines += ["⚠ " + w for w in r["warnings"]]
-        self.preview.configure(text="\n".join(lines), fg=T.WARNING if r["warnings"] else T.TEXT)
-        self.ok_btn.state(["!disabled"])
-
-    def save(self):
-        try:
-            v, rates = self._compute()
-        except EtchInputError as e:
-            messagebox.showwarning("新增蝕刻紀錄", str(e), parent=self)
-            return
-        row = make_row(rates, hbn_before=v["hbn_before"], hbn_after=v["hbn_after"], t=v["t"],
-                       marker_before=v["marker_before"] or None, marker_after=v["marker_after"] or None,
-                       sio2_before=v["sio2_before"] or None, sio2_after=v["sio2_after"] or None,
-                       method=v["method"], power=v["power"], bias=v["bias"], pressure=v["pressure"],
-                       sample_type=v["sample_type"], name=v["name"], gas=v["gas"])
-        path = self.panel.csv_path()
-        try:
-            existing = store.read_log(path)
-        except Exception:
-            existing = None
-        dup = store.find_duplicates(existing, row)
-        if dup and not messagebox.askyesno(
-                "可能重複", f"第 {', '.join(map(str, dup))} 筆的輸入和這筆完全一樣。\n還是要寫入嗎？", parent=self):
-            return
-        msg = store.header_mismatch(path)
-        try:
-            store.append_csv(row, path)
-        except OSError as e:
-            messagebox.showerror("新增蝕刻紀錄", f"寫入 CSV 失敗（檔案是不是被 Excel 開著？）：\n{e}", parent=self)
-            return
-        et = self.app.settings.get("etching", {})
-        notes = [f"已寫入 {os.path.basename(str(path))}"] + ([msg] if msg else [])
-        if et.get("xlsx_mirror"):
-            try:
-                store.append_xlsx(row, os.path.splitext(str(path))[0] + ".xlsx")
-                notes.append("Excel 也已更新")
-            except Exception as e:
-                notes.append(f"Excel 更新失敗：{e}")
-        if et.get("gsheet_enabled"):
-            settings = self.app.settings
-
-            def work():
-                try:
-                    store.gsheet_append(row, et.get("gsheet_key", ""), S.service_account_path(settings),
-                                        et.get("gsheet_worksheet", ""))
-                    self.app.post(("status", ("Google Sheet 也已寫入", "ok")))
-                except Exception as e:
-                    self.app.post(("status", (f"Google Sheet 寫入失敗（本機 CSV 已存好）：{e}", "error")))
-            self.app.submit(work)
-            notes.append("Google Sheet 寫入中…")
-        last = self.app.state.setdefault("etch_last", {})
-        for k, _, _ in FIELDS:
-            last[k] = v[k]
-        last["reference"] = self.ref_var.get()
-        self.app.save_state_soon()
-        self.app.status("；".join(notes), "ok")
-        self.panel.source_var.set(SOURCES[0])
-        self.panel.reload(select_last=True)
-        if self.keep_var.get():
-            for k, _ in HEIGHTS:
-                self.vars[k].set("")
-        else:
-            self.destroy()
