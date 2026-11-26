@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
@@ -100,6 +101,9 @@ class RecordsPanel(tk.Frame):
         self.tree.bind("<Escape>", lambda e: self.tree.selection_remove(self.tree.selection()))
         self.tree.bind("<Double-1>", lambda e: self.edit_selected() if self.tree.identify_row(e.y) else None)
         self.tree.bind("<Delete>", lambda e: self.delete_selected())
+        if sys.platform == "darwin":                                  # Mac 鍵盤的 delete 鍵 = BackSpace
+            self.tree.bind("<BackSpace>", lambda e: self.delete_selected())
+            self.tree.bind("<Command-a>", lambda e: (self.tree.selection_set(self.tree.get_children()), "break")[1])
 
     # ------------------------------------------------------------------ 讀取
     def csv_path(self):

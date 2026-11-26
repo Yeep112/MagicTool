@@ -88,7 +88,8 @@ class RamanEditor(tk.Toplevel):
         self.set_mode("erase")
         self.protocol("WM_DELETE_WINDOW", self.close)
         for seq, fn in (("<Control-z>", self.undo), ("<Control-Z>", self.undo), ("<Control-y>", self.redo),
-                        ("<Control-Y>", self.redo), ("<Escape>", lambda: self.set_mode("view")),
+                        ("<Control-Y>", self.redo), ("<Command-z>", self.undo), ("<Command-Z>", self.redo),
+                        ("<Command-y>", self.redo), ("<Escape>", lambda: self.set_mode("view")),
                         ("e", lambda: self.set_mode("erase")), ("a", lambda: self.set_mode("anchor")),
                         ("r", lambda: self.set_mode("restore"))):
             self.bind(seq, lambda ev, f=fn: f())

@@ -471,6 +471,53 @@ def _check_etching_03(paths, FakeWS):
     return "；".join(out)
 
 
+def check_mac_support(tmp):
+    """macOS：.command / .sh 啟動檔（LF 換行、可執行）、找 Python、Magic Tool.app 的內容。
+    （這台不是 Mac 時只檢查檔案與 app 結構；找 Python 的腳本在 macOS / Linux 上實際跑一次）"""
+    import plistlib
+    import subprocess
+    from .core.settings import TOOL_ROOT
+    from .install import make_mac_app, mac_launcher_script
+    from .updater import make_executable
+    out = []
+    for name in ("run_magic.command", "install.command", "publish.command", "magic_env.sh"):
+        fp = os.path.join(TOOL_ROOT, name)
+        data = open(fp, "rb").read()
+        assert data.startswith(b"#!/bin/bash"), f"{name} 第一行要是 #!/bin/bash"
+        assert b"\r" not in data, f"{name} 不能有 Windows 換行（Mac 會無法執行）"
+    out.append("啟動檔 4 個")
+    app = make_mac_app(os.path.join(tmp, "Applications", "Magic Tool.app"), python=sys.executable)
+    with open(os.path.join(app, "Contents", "Info.plist"), "rb") as f:
+        info = plistlib.load(f)
+    assert info["CFBundleExecutable"] == "MagicTool" and info["CFBundleIdentifier"]
+    exe = os.path.join(app, "Contents", "MacOS", "MagicTool")
+    assert os.path.exists(os.path.join(app, "Contents", "Resources", "icon.icns")), "app 沒有圖示"
+    script = mac_launcher_script("/路徑 有 空白/Magic'Tool", "/opt/anaconda3/bin/python")
+    bash = shutil.which("bash")
+    if os.name != "nt" and bash:
+        assert os.stat(exe).st_mode & 0o111, "app 的啟動腳本要可以執行"
+        for code in (open(exe, encoding="utf-8").read(), script):
+            r = subprocess.run([bash, "-n"], input=code, text=True, capture_output=True)
+            assert r.returncode == 0, r.stderr
+        # 啟動檔沒有執行權限時（例如從 zip 解壓縮）→ 更新後補上
+        d = os.path.join(tmp, "exec_test")
+        os.makedirs(d, exist_ok=True)
+        fp = os.path.join(d, "a.command")
+        open(fp, "w").write("#!/bin/bash\n")
+        os.chmod(fp, 0o644)
+        assert make_executable(d) == ["a.command"] and os.stat(fp).st_mode & 0o100
+        # 找 Python 的腳本：用目前這個 Python 的資料夾當 PATH，要找得到
+        env = dict(os.environ, MAGIC_DATA=os.path.join(tmp, "envtest"),
+                   PATH=os.path.dirname(sys.executable) + os.pathsep + "/usr/bin:/bin")
+        env.pop("CONDA_PREFIX", None)
+        r = subprocess.run([bash, "-c", 'source "$1" && echo "PY=$PYEXE"', "_", os.path.join(TOOL_ROOT, "magic_env.sh")],
+                           env=env, capture_output=True, text=True, timeout=120, input="n\n")
+        assert r.returncode == 0 and "PY=" in r.stdout and r.stdout.strip() != "PY=", r.stdout + r.stderr
+        out.append("找 Python 的腳本、app 腳本語法")
+    out.append("Magic Tool.app")
+    return "、".join(out)
+
+
 def check_report(tmp):
     """📦 錯誤回報：log 與環境資訊打包成 zip，金鑰路徑與 Google Sheet 網址要遮掉。"""
     import zipfile
@@ -1048,6 +1095,7 @@ def main(gui=True, log=print, require_gui=False):
             rep.check("Raman 編修與峰標註", lambda: check_raman_tools(paths))
         rep.check("設定與工具", lambda: check_settings_and_tools(tmp))
         rep.check("錯誤回報打包", lambda: check_report(tmp))
+        rep.check("macOS 支援（啟動檔、App）", lambda: check_mac_support(tmp))
         rep.check("自動更新（本機模擬）", lambda: check_update(tmp))
         if gui:
             run_gui(rep)

@@ -8,8 +8,13 @@ import os
 
 PLOT_CYCLE = ["#2563eb", "#e4572e", "#17a398", "#f2a541", "#7c3aed", "#ef476f",
               "#118ab2", "#8d6a9f", "#06d6a0", "#5c6b73"]
-_CJK_PREF = ["Microsoft JhengHei", "Microsoft YaHei", "PMingLiU", "PingFang TC", "Noto Sans CJK TC",
+_CJK_PREF = ["Microsoft JhengHei", "Microsoft YaHei", "PMingLiU", "PingFang TC", "PingFang HK", "Heiti TC",
+             "STHeiti", "Hiragino Sans GB", "Hiragino Sans", "Songti TC", "Noto Sans CJK TC",
              "Noto Sans CJK JP", "Noto Sans CJK SC", "Source Han Sans TC", "Arial Unicode MS"]
+_MAC_FONTS = ["/System/Library/Fonts/PingFang.ttc", "/System/Library/Fonts/STHeiti Medium.ttc",
+              "/System/Library/Fonts/STHeiti Light.ttc", "/System/Library/Fonts/Hiragino Sans GB.ttc",
+              "/System/Library/Fonts/Supplemental/Songti.ttc", "/Library/Fonts/Arial Unicode.ttf",
+              "/System/Library/Fonts/Supplemental/Arial Unicode.ttf"]
 _applied = False
 
 
@@ -32,9 +37,30 @@ def _windows_cjk_fonts():
     return names
 
 
+def _mac_cjk_fonts():
+    """macOS：matplotlib 不一定掃得到系統的中文字型（PingFang 藏在 AssetsV2），直接加進來。"""
+    import glob
+    import sys
+    if sys.platform != "darwin":
+        return []
+    from matplotlib import font_manager
+    paths = list(_MAC_FONTS) + sorted(glob.glob("/System/Library/AssetsV2/*/*/AssetData/PingFang.ttc"))
+    names = []
+    for path in paths:
+        if os.path.exists(path):
+            try:
+                font_manager.fontManager.addfont(path)
+                name = font_manager.FontProperties(fname=path).get_name()
+                if name not in names:
+                    names.append(name)
+            except Exception:
+                pass
+    return names
+
+
 def cjk_fonts():
     from matplotlib import font_manager
-    found = _windows_cjk_fonts()
+    found = _windows_cjk_fonts() + _mac_cjk_fonts()
     have = {f.name for f in font_manager.fontManager.ttflist}
     return found + [f for f in _CJK_PREF if f in have and f not in found]
 

@@ -25,6 +25,8 @@ def data_dir():
         path = env
     elif os.environ.get("LOCALAPPDATA"):
         path = os.path.join(os.environ["LOCALAPPDATA"], "MagicTool")
+    elif sys.platform == "darwin":
+        path = os.path.join(os.path.expanduser("~"), "Library", "Application Support", "MagicTool")
     else:
         path = os.path.join(os.path.expanduser("~"), ".magictool")
     os.makedirs(path, exist_ok=True)
@@ -157,7 +159,7 @@ class Splash:
         try:
             from tkinter import font as tkfont
             fams = set(tkfont.families())
-            for f in ("Microsoft JhengHei UI", "Microsoft JhengHei", "PingFang TC", "Noto Sans CJK TC"):
+            for f in ("Microsoft JhengHei UI", "Microsoft JhengHei", "PingFang TC", "Heiti TC", "Noto Sans CJK TC"):
                 if f in fams:
                     return f
         except Exception:
@@ -238,6 +240,12 @@ def main(open_path=None, check_updates=True):
         root.state("zoomed")            # Windows：最大化開啟
     except Exception:
         pass
+    if sys.platform == "darwin":                       # macOS 沒有 zoomed：直接放到螢幕大小（扣掉選單列、Dock）
+        try:
+            sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
+            root.geometry(f"{sw}x{max(sh - 110, 600)}+0+25")
+        except Exception:
+            pass
     root.focus_force()
     root.report_callback_exception = _report_callback(root)
     root.after(400, lambda: set_taskbar_relaunch(root))

@@ -13,6 +13,7 @@
 """
 from __future__ import annotations
 
+import glob
 import json
 import os
 import shutil
@@ -192,6 +193,24 @@ def _copy_item(src, dst):
         shutil.copy2(src, dst)
 
 
+EXEC_PATTERNS = ("*.command", "*.sh")          # macOS / Linux 的啟動檔要有執行權限
+
+
+def make_executable(root=TOOL_ROOT):
+    """解壓縮後的檔案沒有執行權限 → macOS 雙擊 .command 會說「沒有權限」；這裡補上。Windows 不用。"""
+    if os.name == "nt":
+        return []
+    done = []
+    for pat in EXEC_PATTERNS:
+        for fp in glob.glob(os.path.join(root, pat)):
+            try:
+                os.chmod(fp, os.stat(fp).st_mode | 0o111)
+                done.append(os.path.basename(fp))
+            except OSError:
+                pass
+    return done
+
+
 def _remove(path):
     if os.path.isdir(path):
         shutil.rmtree(path, ignore_errors=True)
@@ -253,6 +272,7 @@ def apply_update(info=None, log=print, zip_source=None, root=TOOL_ROOT):
             _remove(dst)
             _copy_item(os.path.join(new_root, e), dst)
         write_release(new_rel, os.path.join(root, "release.json"))
+        make_executable(root)
         sha = (info or {}).get("commit") or remote_commit(local.get("repo", ""), local.get("branch", "main"))[0] \
             if local.get("repo") else None
         _write_installed(sha, root)
@@ -495,6 +515,10 @@ def publish(log=print, ask=input, root=None, test=True):
         owner = (rel.get("repo") or "user/x").split("/")[0]
         ident = ("-c", f"user.name={owner}", "-c", f"user.email={owner}@users.noreply.github.com")
     run("add", "-A")
+    # Windows 的 git 不會記錄「可執行」：.command / .sh 要明確標記，Mac 下載後才能雙擊執行
+    execs = [os.path.basename(f) for pat in EXEC_PATTERNS for f in glob.glob(os.path.join(root, pat))]
+    if execs:
+        run("update-index", "--chmod=+x", *execs, check=False, quiet=True)
     msg = f"v{rel['version']}"
     body = "\n".join("- " + n for n in rel.get("notes", []))
     out = run("commit", "-m", msg, *(("-m", body) if body else ()), check=False, extra=ident)

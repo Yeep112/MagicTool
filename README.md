@@ -10,6 +10,10 @@ MagicTool\
 ├─ MagicTool.pyw        ← 直接開啟軟體（工作列釘選的圖示執行的就是它）
 ├─ publish.bat          ← 開發者：一鍵發佈到 GitHub（同事會收到更新）
 ├─ magic_env.bat        ← 尋找電腦上的 Python（給上面的啟動檔用）
+├─ install.command      ← Mac：第一次執行，建立「Magic Tool.app」（應用程式 + 桌面）
+├─ run_magic.command    ← Mac：開啟軟體 / selftest / update / publish（和 run_magic.bat 一樣）
+├─ publish.command      ← Mac：開發者發佈到 GitHub
+├─ magic_env.sh         ← Mac / Linux：尋找電腦上的 Python
 ├─ release.json         ← 版本號與更新內容（版本號只寫在這裡）
 ├─ 發佈與更新.md         ← 第一次上傳 GitHub、之後每次發佈的步驟
 ├─ magic\               ← 程式本體（Python 原始檔，可以直接改）
@@ -23,13 +27,35 @@ MagicTool\
 ```
 
 需要：Anaconda（numpy、scipy、pandas、matplotlib、tkinter 都內建）。Google Sheet 同步另外需要 `pip install gspread google-auth`。
+Windows 和 macOS 都可以用（同一個資料夾、同一份程式）。
 
-## 第一次使用
+## 第一次使用（Windows）
 
 1. 把整個資料夾放在固定位置，例如 `D:\Yeep\MagicTool\`（不要在 zip 裡直接執行）。
 2. 雙擊 **`install.bat`**（只要一次）：「開始」功能表和桌面會出現「Magic Tool 實驗分析」。
 3. 開啟後在每台機台按「選資料夾」；沒有資料想先試試看，按「先用範例資料試試看」（合成資料，不是真實量測）。
 4. Etching：到 **⚙ 設定 → 蝕刻紀錄** 把「紀錄 CSV」指向原本的 `etch_rate_log.csv`。舊格式（20 欄）可以直接讀；第一次新增紀錄時會**先備份**再把新欄位加在最後面（舊欄位、舊紀錄都不變）。
+
+## 第一次使用（Mac）
+
+`.bat` 是 Windows 專用的，Mac 打開只會看到文字。Mac 請用 `.command` 檔：
+
+1. 安裝 **Anaconda**（https://www.anaconda.com/download ，選 macOS；Apple 晶片 / Intel 都有）。已經有 Anaconda / Miniconda 就跳過。
+2. 下載 GitHub 的 zip、解壓縮，把 `MagicTool-main` 資料夾放到固定位置（例如「文件」），不要留在「下載項目」裡一直搬動。
+3. 打開「終端機」（Spotlight 搜尋 Terminal），輸入 `bash`、空一格，把資料夾裡的 **`install.command`** 拖進終端機視窗，按 Enter。
+   - 這個方法一定可以執行（不受「無法驗證開發者」與執行權限影響）。安裝時會順便解除資料夾的下載隔離，之後雙擊 `.command` 也能直接開。
+   - 也可以直接雙擊 `install.command`；如果出現「無法打開，因為無法驗證開發者」：
+     到 **系統設定 → 隱私權與安全性**，在下面按「強制打開」（較舊的 macOS：在檔案上按右鍵 →「打開」→「打開」）。
+4. 完成後「應用程式」與桌面會出現 **Magic Tool**（Launchpad、Spotlight 也找得到）。之後就從那裡開，不會出現終端機。
+   開啟後在 Dock 的圖示上按右鍵 →「選項」→「保留在 Dock」。
+5. 程式資料夾搬家後，再執行一次 `install.command` 即可。
+
+Mac 上的差別：
+
+- 設定、紀錄、log 放在 `~/Library/Application Support/MagicTool/`（Windows 是 `%LOCALAPPDATA%\MagicTool\`），下面寫 `%LOCALAPPDATA%` 的地方 Mac 都是這個資料夾。
+- 快速鍵用 ⌘（⌘S 存圖、⌘E 匯出、⌘1–4 切換機台、⌘Z 復原）；紀錄表的 delete 鍵 = 刪除。
+- 軟體內的「檢查更新」一樣可以用；更新後啟動檔的執行權限會自動補上。
+- 找不到 Python 時，終端機會說明要裝什麼；有 Python 但缺套件時，可以選擇自動安裝。
 
 ## 介面
 

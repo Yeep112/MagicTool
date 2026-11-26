@@ -82,10 +82,13 @@ class App:
         root.after(400, self._prebuild)
         root.protocol("WM_DELETE_WINDOW", self.close)
         root.bind("<F5>", lambda e: self.current and self.current.plot())
-        root.bind("<Control-s>", lambda e: self.current and self.current.save_figure())
-        root.bind("<Control-e>", lambda e: self.current and self.current.export())
+        mods = ("Control", "Command") if sys.platform == "darwin" else ("Control",)   # macOS 用 ⌘
+        for mod in mods:
+            root.bind(f"<{mod}-s>", lambda e: self.current and self.current.save_figure())
+            root.bind(f"<{mod}-e>", lambda e: self.current and self.current.export())
         for i, k in enumerate(INSTRUMENTS, 1):
-            root.bind(f"<Control-Key-{i}>", lambda e, k=k: self.segment.select(k))
+            for mod in mods:
+                root.bind(f"<{mod}-Key-{i}>", lambda e, k=k: self.segment.select(k))
         if LOAD_ERRORS:
             root.after(800, self._show_load_errors)
         if open_path:

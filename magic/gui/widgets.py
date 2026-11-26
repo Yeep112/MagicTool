@@ -72,7 +72,11 @@ class ScrollFrame(tk.Frame):
         self.canvas.yview_scroll(n, "units")
 
     def _on_wheel(self, e):
-        self._scroll(int(-e.delta / 120) * 2)
+        d = getattr(e, "delta", 0)
+        if abs(d) >= 120:                      # Windows：一格 = 120
+            self._scroll(int(-d / 120) * 2)
+        elif d:                                # macOS：觸控板 / 滑鼠是小的數字（±1…±10）
+            self._scroll(-1 if d > 0 else 1)
 
     def to_top(self):
         self.canvas.yview_moveto(0)

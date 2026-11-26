@@ -1,16 +1,26 @@
 {
-  "version": "0.4.0",
+  "version": "0.5.0",
   "repo": "Yeep112/MagicTool",
   "branch": "main",
   "date": "2026-11-26",
   "notes": [
-    "Etching 示意圖：光阻畫成貼在樣品上的膜，材料、marker 上方像丘陵一樣鼓起來；有光阻蝕刻率時動畫裡光阻會變薄",
-    "Etching：每筆紀錄可以放蝕刻前、後的 OM 照片（選填），複製到紀錄旁的 _images 資料夾；表格 📷、「🖼 OM」並排看",
-    "⚙ 設定 → 更新：📦 打包錯誤紀錄（error.log、crash.log、環境資訊，金鑰會遮掉），發生錯誤時也可以直接打包",
-    "發佈前檢查：publish.bat 一定要實際開視窗、每個功能畫一次、量切換 / 背景計算 / 動畫的流暢度，沒通過就不上傳",
-    "紀錄 CSV 加了 OM before、OM after 兩欄（加在最後面），舊版寫的檔案會自動備份再補上"
+    "支援 macOS：install.command 建立「Magic Tool.app」（應用程式 + 桌面），run_magic.command / publish.command 對應 Windows 的 .bat",
+    "Mac 自動尋找 Anaconda / Miniconda / python.org / Homebrew 的 Python；缺套件時可以自動安裝",
+    "Mac 的設定與紀錄放在 ~/Library/Application Support/MagicTool；快速鍵用 ⌘；觸控板捲動、中文字型、視窗大小都調整過",
+    "軟體內更新後自動補上 .command 的執行權限；發佈時自動把 .command / .sh 標記為可執行、固定 LF 換行"
   ],
   "history": [
+    {
+      "version": "0.4.0",
+      "date": "2026-11-26",
+      "notes": [
+        "Etching 示意圖：光阻畫成貼在樣品上的膜，材料、marker 上方像丘陵一樣鼓起來；有光阻蝕刻率時動畫裡光阻會變薄",
+        "Etching：每筆紀錄可以放蝕刻前、後的 OM 照片（選填），複製到紀錄旁的 _images 資料夾；表格 📷、「🖼 OM」並排看",
+        "⚙ 設定 → 更新：📦 打包錯誤紀錄（error.log、crash.log、環境資訊，金鑰會遮掉），發生錯誤時也可以直接打包",
+        "發佈前檢查：publish.bat 一定要實際開視窗、每個功能畫一次、量切換 / 背景計算 / 動畫的流暢度，沒通過就不上傳",
+        "紀錄 CSV 加了 OM before、OM after 兩欄（加在最後面），舊版寫的檔案會自動備份再補上"
+      ]
+    },
     {
       "version": "0.3.0",
       "date": "2026-11-26",

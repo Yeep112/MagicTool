@@ -1,6 +1,8 @@
 """介面配色、字型、介面大小（取自 LowTempAnalysis 的 theme.py；主色改成每台機台一個）。"""
 from __future__ import annotations
 
+import sys
+
 from .colors import mix, shades
 
 BG = "#eef2f8"
@@ -45,12 +47,12 @@ MONO_FAMILY = "Consolas"
 def pick_fonts(tkfont):
     global FONT_FAMILY, MONO_FAMILY
     fams = set(tkfont.families())
-    for f in ("Microsoft JhengHei UI", "Microsoft JhengHei", "PingFang TC", "Noto Sans CJK TC",
+    for f in ("Microsoft JhengHei UI", "Microsoft JhengHei", "PingFang TC", "Heiti TC", "Noto Sans CJK TC",
               "Noto Sans TC", "Noto Sans CJK JP", "Segoe UI"):
         if f in fams:
             FONT_FAMILY = f
             break
-    for f in ("Cascadia Mono", "Consolas", "Menlo", "Noto Sans Mono CJK TC", "DejaVu Sans Mono"):
+    for f in ("Cascadia Mono", "Consolas", "Menlo", "SF Mono", "Monaco", "Noto Sans Mono CJK TC", "DejaVu Sans Mono"):
         if f in fams:
             MONO_FAMILY = f
             break
@@ -88,12 +90,16 @@ def detect_screen(root):
             _BASE_DPI = 96.0
         if not (48 <= _BASE_DPI <= 480):
             _BASE_DPI = 96.0
+        if sys.platform == "darwin":
+            _BASE_DPI = 96.0      # macOS 的座標是「點」（Retina 也一樣），版面照 Windows 100% 的尺寸排
     try:
         sw, sh = int(root.winfo_screenwidth()), int(root.winfo_screenheight())
     except Exception:
         sw, sh = 1920, 1080
     win_scale = _BASE_DPI / 96.0
     lw, lh = sw / win_scale, sh / win_scale
+    if sys.platform == "darwin":
+        lh -= 110                 # 選單列與 Dock
     if lh >= 2000:
         auto = 1.5
     elif lh >= 1600:

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import fnmatch
 import os
+import sys
 import time
 import tkinter as tk
 from tkinter import filedialog, ttk
@@ -79,6 +80,8 @@ class FilePanel(tk.Frame):
         self.tree.tag_configure("other", foreground=T.FAINT)
         self.tree.bind("<<TreeviewSelect>>", lambda e: self.page.on_selection())
         self.tree.bind("<Control-a>", lambda e: (self.select_all(), "break")[1])
+        if sys.platform == "darwin":
+            self.tree.bind("<Command-a>", lambda e: (self.select_all(), "break")[1])
         self._sort = ("mtime", True)
 
         self.empty = tk.Frame(tf, bg=T.CARD)

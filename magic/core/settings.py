@@ -6,6 +6,7 @@
         gui_state.json       介面狀態：上次的資料夾、功能、參數、分隔線位置
         secrets\\             金鑰（service_account.json）；不會被同步或上傳
         logs\\                app.log、error.log、crash.log
+    macOS  ：~/Library/Application Support/MagicTool/（同樣的檔案）
     其他系統：~/.magictool/
 
 測試或攜帶式使用時，可以用環境變數 MAGIC_DATA 指定別的位置。
@@ -15,6 +16,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import sys
 from pathlib import Path
 
 APP_FOLDER = "MagicTool"
@@ -44,6 +46,8 @@ def data_dir() -> Path:
         p = Path(env)
     elif os.environ.get("LOCALAPPDATA"):
         p = Path(os.environ["LOCALAPPDATA"]) / APP_FOLDER
+    elif sys.platform == "darwin":
+        p = Path.home() / "Library" / "Application Support" / APP_FOLDER
     else:
         p = Path.home() / ".magictool"
     p.mkdir(parents=True, exist_ok=True)
