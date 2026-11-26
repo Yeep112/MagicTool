@@ -211,57 +211,64 @@ class FigurePanel(tk.Frame):
 
     # ------------------------------------------------------------------ 樣式列
     def _build_style_bar(self):
+        from .widgets import Flow
         bar = tk.Frame(self, bg=T.SUBTLE, highlightthickness=1, highlightbackground=T.BORDER)
         bar.pack(fill="x", pady=(8, 0))
-        r0 = tk.Frame(bar, bg=T.SUBTLE)
-        r0.pack(fill="x")
-        r1 = tk.Frame(bar, bg=T.SUBTLE)
-        r1.pack(fill="x")
-        r2 = tk.Frame(bar, bg=T.SUBTLE)
-        r2.pack(fill="x")
+        rows = []
+        for _ in range(3):                    # 三列：圖標題 / 圖的大小 / 圖表樣式；窄視窗時每列自動換行
+            r = Flow(bar, bg=T.SUBTLE)
+            r.pack(fill="x")
+            rows.append(r)
+        r0, r1, r2 = rows
 
-        def lab(parent, text, bold=False, padx=(8, 2)):
+        def lab(parent, text, bold=False, padx=(0, 2)):
             tk.Label(parent, text=text, bg=T.SUBTLE, fg=T.MUTED, font=T.font(9, "bold" if bold else "normal")).pack(
                 side="left", padx=padx)
         self._build_title_row(r0, lab)
-        # 第一列：大小
-        lab(r1, "圖的大小", True, (8, 6))
+        # 圖的大小
+        g = r1.group()
+        lab(g, "圖的大小", True, (2, 6))
         self.size_var = tk.StringVar(value=self.view.get("size_mode", SIZE_MODES[0]))
-        cb = ttk.Combobox(r1, textvariable=self.size_var, values=SIZE_MODES, state="readonly", width=9)
-        cb.pack(side="left", pady=3)
+        ttk.Combobox(g, textvariable=self.size_var, values=SIZE_MODES, state="readonly", width=9).pack(side="left",
+                                                                                                    pady=3)
         self.w_var = tk.StringVar(value=str(self.view.get("fig_w", 1100)))
         self.h_var = tk.StringVar(value=str(self.view.get("fig_h", 650)))
-        lab(r1, "寬")
-        ew = ttk.Entry(r1, textvariable=self.w_var, width=6)
-        ew.pack(side="left")
-        lab(r1, "高", padx=(6, 2))
-        eh = ttk.Entry(r1, textvariable=self.h_var, width=6)
+        g = r1.group()
+        lab(g, "寬")
+        ew = ttk.Entry(g, textvariable=self.w_var, width=6)
+        ew.pack(side="left", pady=3)
+        lab(g, "高", padx=(6, 2))
+        eh = ttk.Entry(g, textvariable=self.h_var, width=6)
         eh.pack(side="left")
-        tk.Label(r1, text="px", bg=T.SUBTLE, fg=T.FAINT, font=T.font(9)).pack(side="left", padx=(2, 10))
-        ttk.Button(r1, text="↺ 圖例", style=f"{self.key}.Small.TButton", command=self.reset_legends).pack(
-            side="right", padx=(2, 6), pady=2)
-        ttk.Button(r1, text="✎ 標題與軸標籤", style=f"{self.key}.Small.TButton", command=self.edit_labels).pack(
-            side="right", padx=2, pady=2)
-        # 第二列：樣式（格線、各種字體大小）
-        lab(r2, "圖表樣式", True, (8, 6))
+        tk.Label(g, text="px", bg=T.SUBTLE, fg=T.FAINT, font=T.font(9)).pack(side="left", padx=(2, 0))
+        g = r1.group()
+        lab(g, "字體一鍵設定")
+        self.font_var = tk.StringVar(value=self.view.get("font", "中"))
+        fc = ttk.Combobox(g, textvariable=self.font_var, values=list(FONT_SIZES), state="readonly", width=4)
+        fc.pack(side="left", pady=3)
+        fc.bind("<<ComboboxSelected>>", lambda e: self._preset())
+        g = r1.group()
+        ttk.Button(g, text="✎ 標題與軸標籤", style=f"{self.key}.Small.TButton", command=self.edit_labels).pack(
+            side="left", pady=2)
+        ttk.Button(g, text="↺ 圖例", style=f"{self.key}.Small.TButton", command=self.reset_legends).pack(
+            side="left", padx=(4, 0), pady=2)
+        # 圖表樣式（格線、各種字體大小）
+        g = r2.group()
+        lab(g, "圖表樣式", True, (2, 6))
         self.grid_var = tk.BooleanVar(value=bool(self.view.get("grid", True)))
-        ttk.Checkbutton(r2, text="格線", variable=self.grid_var, style=f"{self.key}.TCheckbutton").pack(side="left")
+        ttk.Checkbutton(g, text="格線", variable=self.grid_var, style=f"{self.key}.TCheckbutton").pack(side="left",
+                                                                                                     pady=3)
         self.size_vars = {}
         base = FONT_SIZES["中"]
         for k, text in STYLE_FIELDS:
-            lab(r2, text, padx=(8, 2))
+            g = r2.group()
+            lab(g, text)
             var = tk.StringVar(value=str(self.view.get(k, base[k])))
-            sp = ttk.Spinbox(r2, from_=5, to=48, increment=1, textvariable=var, width=3,
-                             command=self._style_changed)
+            sp = ttk.Spinbox(g, from_=5, to=48, increment=1, textvariable=var, width=3, command=self._style_changed)
             sp.pack(side="left", pady=3)
             sp.bind("<Return>", lambda e: self._style_changed())
             sp.bind("<FocusOut>", lambda e: self._style_changed())
             self.size_vars[k] = var
-        lab(r1, "字體一鍵設定", padx=(4, 2))
-        self.font_var = tk.StringVar(value=self.view.get("font", "中"))
-        fc = ttk.Combobox(r1, textvariable=self.font_var, values=list(FONT_SIZES), state="readonly", width=4)
-        fc.pack(side="left", padx=(0, 8))
-        fc.bind("<<ComboboxSelected>>", lambda e: self._preset())
         for v in (self.size_var, self.grid_var):
             v.trace_add("write", lambda *a: self._style_changed())
         for e in (ew, eh):
@@ -272,39 +279,43 @@ class FigurePanel(tk.Frame):
         """圖標題：新增 / 修改 / 移除；可以用 {日期}{機台}{功能}{檔名}；套用範圍：這個功能 / 這台機台 / 所有圖。"""
         from .fig_tools import PLACEHOLDERS, TITLE_SCOPES
         from .params_panel import Tooltip
-        lab(row, "圖標題", True, (8, 6))
+        g = row.group()
+        lab(g, "圖標題", True, (2, 6))
         self.title_var = tk.StringVar()
-        self.title_entry = ttk.Entry(row, textvariable=self.title_var, width=22)
+        self.title_entry = ttk.Entry(g, textvariable=self.title_var, width=22)
         self.title_entry.pack(side="left", pady=3)
         Tooltip(self.title_entry, "例如「{日期}的{機台}分析圖」→「20261126的Raman分析圖」。空白 = 沒有標題")
-        menu = tk.Menu(row, tearoff=False)
+        menu = tk.Menu(g, tearoff=False)
         for ph, desc in PLACEHOLDERS:
             menu.add_command(label=f"{ph}　{desc}", command=lambda ph=ph: self._insert_placeholder(ph))
         menu.add_separator()
         for ex in ("{日期}的{機台}分析圖", "{日期} {功能}", "{檔名} — {功能}"):
             menu.add_command(label=f"範例：{ex}", command=lambda ex=ex: self.title_var.set(ex))
-        b = ttk.Button(row, text="插入 ▾", width=6, style=f"{self.key}.Small.TButton")
+        b = ttk.Button(g, text="插入 ▾", width=6, style=f"{self.key}.Small.TButton")
         b.configure(command=lambda: menu.tk_popup(b.winfo_rootx(), b.winfo_rooty() + b.winfo_height()))
         b.pack(side="left", padx=(4, 0))
-        lab(row, "範圍", padx=(8, 2))
+        g = row.group()
+        lab(g, "範圍")
         self.title_scope = tk.StringVar(value=TITLE_SCOPES[0])
-        sc = ttk.Combobox(row, textvariable=self.title_scope, values=TITLE_SCOPES, state="readonly", width=10)
+        sc = ttk.Combobox(g, textvariable=self.title_scope, values=TITLE_SCOPES, state="readonly", width=10)
         Tooltip(sc, "只有這張圖 = 這個分析功能；這台機台全部 = 這台機台的所有功能；所有圖 = 所有機台、所有功能")
-        sc.pack(side="left")
+        sc.pack(side="left", pady=3)
         sc.bind("<<ComboboxSelected>>", lambda e: self._title_changed(now=True))
-        lab(row, "大小", padx=(8, 2))
+        g = row.group()
+        lab(g, "大小")
         var = tk.StringVar(value=str(self.view.get("suptitle", FONT_SIZES["中"]["suptitle"])))
-        sp = ttk.Spinbox(row, from_=6, to=60, increment=1, textvariable=var, width=3, command=self._style_changed)
-        sp.pack(side="left")
+        sp = ttk.Spinbox(g, from_=6, to=60, increment=1, textvariable=var, width=3, command=self._style_changed)
+        sp.pack(side="left", pady=3)
         sp.bind("<Return>", lambda e: self._style_changed())
         sp.bind("<FocusOut>", lambda e: self._style_changed())
         self._title_size_var = var
         self.bold_var = tk.BooleanVar(value=bool(self.view.get("suptitle_bold", True)))
-        ttk.Checkbutton(row, text="粗體", variable=self.bold_var, style=f"{self.key}.TCheckbutton",
+        ttk.Checkbutton(g, text="粗體", variable=self.bold_var, style=f"{self.key}.TCheckbutton",
                         command=self._style_changed).pack(side="left", padx=(6, 0))
-        rm = ttk.Button(row, text="✕ 移除", width=6, style=f"{self.key}.Small.TButton", command=self.remove_title)
-        rm.pack(side="left", padx=(8, 0))
-        Tooltip(rm, "依「套用到」的範圍移除：只有這張圖、這台機台、或所有圖都不顯示標題")
+        g = row.group()
+        rm = ttk.Button(g, text="✕ 移除", width=6, style=f"{self.key}.Small.TButton", command=self.remove_title)
+        rm.pack(side="left", pady=2)
+        Tooltip(rm, "依「範圍」移除：只有這張圖、這台機台、或所有圖都不顯示標題")
         self._title_job = None
         self._title_loading = False
         self.title_api = None                 # 頁面設定（存在哪裡、目前是哪一層）

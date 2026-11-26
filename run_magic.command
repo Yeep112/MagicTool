@@ -8,6 +8,7 @@
 #    ./run_magic.command install         make "Magic Tool.app" (Applications + Desktop)
 #    ./run_magic.command selftest        run the self test (synthetic data only)
 #    ./run_magic.command diag            show diagnostics
+#    ./run_magic.command debug           open the program here and show every message (when it won't start)
 #    ./run_magic.command update          check GitHub for a new version
 #    ./run_magic.command publish         developer: upload this version to GitHub
 #
@@ -65,6 +66,13 @@ case "${1:-gui}" in
     uninstall) "$PYEXE" -m magic uninstall; pause ;;
     update) "$PYEXE" -m magic update; pause ;;
     diag) "$PYEXE" -m magic diag; pause ;;
+    debug)
+        echo "  用 $PYEXE 開啟程式（所有訊息都顯示在這裡；關掉程式後這裡會顯示結束碼）"
+        echo
+        MAGIC_LAUNCHER=debug "$PYEXE" -X faulthandler -m magic app
+        echo; echo "  結束碼：$?"
+        tail -n 30 "$MT_DATA/logs/error.log" 2>/dev/null
+        pause ;;
     publish) "$PYEXE" -m magic publish; pause ;;
     *)
         nohup "$PYW" -m magic app "$1" >/dev/null 2>&1 &

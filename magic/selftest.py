@@ -514,6 +514,24 @@ def check_mac_support(tmp):
                            env=env, capture_output=True, text=True, timeout=120, input="n\n")
         assert r.returncode == 0 and "PY=" in r.stdout and r.stdout.strip() != "PY=", r.stdout + r.stderr
         out.append("找 Python 的腳本、app 腳本語法")
+        # App 殼：pythonw 一開就失敗 → 改用 python 再試；還是失敗 → 跳出說明（這台沒有 osascript 時印出 ALERT）
+        fake = os.path.join(tmp, "fakepy")
+        os.makedirs(fake, exist_ok=True)
+        for name in ("pythonw", "python"):
+            fp = os.path.join(fake, name)
+            with open(fp, "w", newline="\n") as f:
+                f.write(f"#!/bin/bash\necho 'Traceback: {name} 測試失敗' >&2\nexit 1\n")
+            os.chmod(fp, 0o755)
+        home = os.path.join(tmp, "machome")
+        app2 = make_mac_app(os.path.join(home, "Applications", "T.app"), python=os.path.join(fake, "python"))
+        r = subprocess.run([os.path.join(app2, "Contents", "MacOS", "MagicTool")], capture_output=True, text=True,
+                           timeout=60, env={"HOME": home, "PATH": "/usr/bin:/bin"})
+        log = open(os.path.join(home, "Library", "Application Support", "MagicTool", "logs", "app_launch.log"),
+                   encoding="utf-8").read()
+        assert r.returncode == 1 and "改用 python 再試一次" in log, log
+        if not shutil.which("osascript"):
+            assert "ALERT:" in r.stderr and "python 測試失敗" in r.stderr, r.stderr
+        out.append("App 殼：失敗時改用 python 重試、顯示錯誤")
     out.append("Magic Tool.app")
     return "、".join(out)
 
@@ -762,7 +780,8 @@ def run_gui(rep, timeout=90):
         app.on_view_change()
         pump(lambda: False, 0.5)
         w = page.right.canvas.get_tk_widget()
-        fixed_ok = w.winfo_width() >= 2300 and page.right.hsb.winfo_ismapped()
+        from .gui import theme as _T
+        fixed_ok = w.winfo_width() >= _T.px(2400) * 0.95 and page.right.hsb.winfo_ismapped()   # 小螢幕介面會縮放
         app.view.update(size_mode="填滿視窗")
         app.on_view_change()
         pump(lambda: False, 0.3)

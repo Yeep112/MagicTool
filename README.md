@@ -57,6 +57,16 @@ Mac 上的差別：
 - 軟體內的「檢查更新」一樣可以用；更新後啟動檔的執行權限會自動補上。
 - 找不到 Python 時，終端機會說明要裝什麼；有 Python 但缺套件時，可以選擇自動安裝。
 
+Mac 打不開時：
+
+- 點 App 後如果沒有正常開啟，會跳出視窗顯示錯誤的最後幾行（可以「打開紀錄」）；紀錄在
+  `~/Library/Application Support/MagicTool/logs/app_launch.log`。把這個視窗截圖，或用 ⚙ 設定 → 更新 → 📦 打包錯誤紀錄 傳給維護的人。
+- 在終端機執行 `bash ~/Documents/MagicTool-main/run_magic.command debug`（路徑換成你的資料夾）：
+  程式直接在終端機裡開，所有訊息都會顯示出來。
+- App 會先用 Anaconda 的 pythonw 開，失敗時自動改用 python 再試一次。
+- 如果提示「沒有權限讀取程式資料夾」：系統偏好設定 → 安全性與隱私 → 隱私權 →「檔案與檔案夾」允許 Magic Tool，
+  或把資料夾搬到家目錄（例如 `~/MagicTool`）再執行一次 `install.command`。
+
 ## 介面
 
 ```

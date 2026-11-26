@@ -104,12 +104,24 @@ def setup_environment():
 
 
 def fatal(msg):
-    """連 Tk 都起不來時，用 Windows 原生訊息框。"""
+    """連 Tk 都起不來時：Windows 用原生訊息框、macOS 用 osascript；也寫進 error.log。"""
+    print(msg, file=sys.stderr)
     try:
-        import ctypes
-        ctypes.windll.user32.MessageBoxW(0, msg, APP_NAME, 0x10)
+        with open(os.path.join(log_dir(), "error.log"), "a", encoding="utf-8") as f:
+            f.write(f"\n===== {time.strftime('%Y-%m-%d %H:%M:%S')}\n{msg}\n")
+    except OSError:
+        pass
+    try:
+        if os.name == "nt":
+            import ctypes
+            ctypes.windll.user32.MessageBoxW(0, msg, APP_NAME, 0x10)
+        elif sys.platform == "darwin" and os.environ.get("MAGIC_LAUNCHER") != "macapp":   # App 的殼會自己顯示
+            import subprocess
+            subprocess.run(["osascript", "-e", "on run argv", "-e", "activate",
+                            "-e", f'display alert "{APP_NAME}" message (item 1 of argv) as critical',
+                            "-e", "end run", msg[:1500]], timeout=600)
     except Exception:
-        print(msg, file=sys.stderr)
+        pass
 
 
 class Splash:
@@ -120,7 +132,11 @@ class Splash:
         import tkinter as tk
         self.tk = tk
         self.win = win = tk.Toplevel(root)
-        win.overrideredirect(True)
+        if sys.platform != "darwin":             # macOS 的 Tk：無邊框視窗有時不會顯示、拿不到焦點，用一般小視窗
+            win.overrideredirect(True)
+        else:
+            win.title(APP_NAME)
+            win.resizable(False, False)
         try:
             win.attributes("-topmost", True)
         except Exception:
@@ -183,10 +199,15 @@ def main(open_path=None, check_updates=True):
     try:
         import tkinter as tk
     except Exception as e:
-        fatal(f"無法載入 tkinter：{e}\n\n請確認使用的是 Anaconda 的 Python。")
+        fatal(f"無法載入 tkinter：{e}\n\n請確認使用的是 Anaconda 的 Python（{sys.executable}）。")
         return 1
 
-    root = tk.Tk()
+    try:
+        root = tk.Tk()
+    except Exception as e:
+        fatal(f"無法開啟視窗（Tk）：{e}\n\n如果是 macOS，請確認使用的是 Anaconda 的 Python；"
+              "詳細紀錄在 ~/Library/Application Support/MagicTool/logs/")
+        return 1
     root.withdraw()
     root.title(APP_NAME)
     try:
@@ -249,6 +270,14 @@ def main(open_path=None, check_updates=True):
     root.focus_force()
     root.report_callback_exception = _report_callback(root)
     root.after(400, lambda: set_taskbar_relaunch(root))
+    if sys.platform == "darwin":
+        def _refresh():
+            try:
+                from ..install import refresh_mac_app
+                refresh_mac_app()
+            except Exception:
+                pass
+        root.after(3000, _refresh)              # 舊版的 Magic Tool.app 自動換成新版的啟動腳本
     root.mainloop()
     return 0
 

@@ -49,25 +49,130 @@ def mac_paths():
             "桌面": os.path.join(home, "Desktop", MAC_APP_NAME)}
 
 
+LAUNCHER_MARK = "magic-launcher v2"
+
+
+def refresh_mac_app():
+    """macOS：已經裝好的 Magic Tool.app 是舊版的啟動腳本 → 換成新版（程式更新後自動做，不用重新 install）。"""
+    if sys.platform != "darwin":
+        return False
+    app = mac_paths()["應用程式"]
+    exe = os.path.join(app, "Contents", "MacOS", "MagicTool")
+    try:
+        text = open(exe, encoding="utf-8").read()
+    except OSError:
+        return False
+    if LAUNCHER_MARK in text and TOOL_ROOT in text:
+        return False
+    import re
+    m = re.search(r"^PY=(.+)$", text, flags=re.M)
+    py = m.group(1).strip().strip("'\"") if m else sys.executable
+    if not os.path.exists(py):
+        py = sys.executable
+    make_mac_app(app, python=py)
+    return True
+
+
 def mac_launcher_script(tool, python):
-    """App 裡真正執行的腳本：用記下的 Python 開程式；資料夾搬走時會跳出提示。"""
+    """App 裡真正執行的腳本。
+
+    ‧ 程式的輸出、錯誤都寫進 ~/Library/Application Support/MagicTool/logs/app_launch.log
+    ‧ 先用 pythonw（Anaconda 的 GUI 版 Python）開；如果一開就失敗，自動改用 python 再試一次
+    ‧ 還是失敗 → 跳出視窗顯示錯誤的最後幾行，可以直接打開紀錄檔（不會再「閃一下就不見」）
+    ‧ 程式資料夾、Python 找不到或沒有權限讀取時，也會跳出說明
+    """
     import shlex
     return f"""#!/bin/bash
+# {LAUNCHER_MARK}
 # Magic Tool 啟動（由 install 產生；程式資料夾搬家後，重新執行一次 install.command 即可）
 TOOL={shlex.quote(tool)}
 PY={shlex.quote(python)}
 DATA="$HOME/Library/Application Support/MagicTool"
+LOGD="$DATA/logs"
+mkdir -p "$LOGD" 2>/dev/null
+LOG="$LOGD/app_launch.log"
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
+
+alert() {{
+    # $1 = 訊息；有 osascript（macOS）就跳視窗，按「打開紀錄」用文字編輯打開 log
+    if command -v osascript >/dev/null 2>&1; then
+        local btn
+        btn=$(osascript - "$1" <<'OSA' 2>/dev/null
+on run argv
+    activate
+    set r to display alert "Magic Tool" message (item 1 of argv) as critical buttons {{"打開紀錄", "好"}} default button "好"
+    return button returned of r
+end run
+OSA
+)
+        if [ "$btn" = "打開紀錄" ]; then open -e "$LOG" 2>/dev/null || open "$LOGD"; fi
+    else
+        echo "ALERT: $1" >&2
+    fi
+}}
+
+touch "$LOG" 2>/dev/null
+LOG0=$(wc -l < "$LOG" 2>/dev/null || echo 0)      # 這一次啟動從第幾行開始（錯誤視窗只顯示這一次的訊息）
+{{ echo; echo "===== $(date '+%Y-%m-%d %H:%M:%S') 啟動"; echo "TOOL=$TOOL"; echo "PY=$PY"; sw_vers 2>/dev/null; uname -m; }} >> "$LOG" 2>&1
+
 if [ ! -f "$TOOL/magic/__main__.py" ] && [ -f "$DATA/tool_path.txt" ]; then TOOL="$(head -n 1 "$DATA/tool_path.txt")"; fi
 if [ ! -x "$PY" ] && [ -f "$DATA/python_path.txt" ]; then PY="$(head -n 1 "$DATA/python_path.txt")"; fi
-if [ ! -f "$TOOL/magic/__main__.py" ] || [ ! -x "$PY" ]; then
-    osascript -e 'display alert "Magic Tool" message "找不到程式資料夾或 Python。請到 Magic Tool 資料夾，再執行一次 install.command。"'
+if [ ! -d "$TOOL" ]; then
+    alert "找不到程式資料夾：$TOOL
+
+資料夾搬家或改名了嗎？請到 Magic Tool 資料夾，再執行一次 install.command。"
     exit 1
 fi
+if ! cd "$TOOL" 2>>"$LOG" || [ ! -r "$TOOL/magic/__main__.py" ]; then
+    alert "沒有權限讀取程式資料夾：$TOOL
+
+macOS 不讓這個 App 讀「文件 / 桌面 / 下載項目」裡的檔案。請到：
+系統偏好設定 → 安全性與隱私 → 隱私權 → 檔案與檔案夾（或「完整磁碟取用權」），允許 Magic Tool；
+或把 MagicTool 資料夾搬到家目錄（例如 ~/MagicTool），再執行一次 install.command。"
+    exit 1
+fi
+if [ ! -x "$PY" ]; then
+    alert "找不到 Python：$PY
+
+請在 Magic Tool 資料夾再執行一次 install.command（需要 Anaconda）。"
+    exit 1
+fi
+
+# Finder 舊版會多傳一個 -psn_… 參數：拿掉
+ARGS=()
+for a in "$@"; do case "$a" in -psn_*) ;; *) ARGS+=("$a") ;; esac; done
+
+export PYTHONUTF8=1 PYTHONIOENCODING=utf-8 MAGIC_LAUNCHER=macapp
+run() {{
+    echo "--- $1 -m magic app" >> "$LOG"
+    "$1" -m magic app "${{ARGS[@]}}" >> "$LOG" 2>&1
+}}
+start=$(date +%s)
+code=0
 PYW="$(dirname "$PY")/pythonw"
-[ -x "$PYW" ] || PYW="$PY"
-cd "$TOOL" || exit 1
-export PYTHONUTF8=1 PYTHONIOENCODING=utf-8
-exec "$PYW" -m magic app "$@"
+if [ -x "$PYW" ] && [ "$PYW" != "$PY" ]; then
+    run "$PYW"; code=$?
+    # 一開就失敗（不是使用者強制結束）→ 改用 python 再試一次
+    if [ $code -ne 0 ] && [ $code -ne 130 ] && [ $code -ne 137 ] && [ $code -ne 143 ] \\
+       && [ $(( $(date +%s) - start )) -lt 30 ]; then
+        echo "pythonw 結束碼 $code，改用 python 再試一次" >> "$LOG"
+        run "$PY"; code=$?
+    fi
+else
+    run "$PY"; code=$?
+fi
+echo "結束碼 $code" >> "$LOG"
+if [ $code -ne 0 ] && [ $code -ne 130 ] && [ $code -ne 137 ] && [ $code -ne 143 ]; then
+    last=$(tail -n +$((LOG0 + 1)) "$LOG" | grep -v '^[[:space:]]*$' | grep -v -E '^(=====|TOOL=|PY=|ProductName|ProductVersion|BuildVersion|x86_64$|arm64$)' | tail -n 12)
+    alert "Magic Tool 沒有正常開啟（結束碼 $code）。
+
+最後的訊息：
+$last
+
+完整紀錄：$LOG
+可以按「打開紀錄」，或到 Magic Tool 資料夾執行 bash run_magic.command debug 看詳細原因。"
+fi
+exit $code
 """
 
 
@@ -95,6 +200,7 @@ def make_mac_app(app_path, tool=TOOL_ROOT, python=None):
             "CFBundleExecutable": "MagicTool", "CFBundleIconFile": "icon", "CFBundlePackageType": "APPL",
             "CFBundleShortVersionString": __version__, "CFBundleVersion": __version__,
             "LSMinimumSystemVersion": "10.13", "NSHighResolutionCapable": True,
+            "LSUIElement": True,          # 這個殼本身不佔 Dock；真正的視窗（Python）會有自己的 Dock 圖示
             "CFBundleGetInfoString": DESCRIPTION}
     with open(os.path.join(app_path, "Contents", "Info.plist"), "wb") as f:
         plistlib.dump(info, f)

@@ -250,3 +250,49 @@ class Paned(tk.PanedWindow):
                 self.sash_place(i, x, int(pos))
         except (tk.TclError, TypeError, ValueError):
             pass
+
+
+class Flow(tk.Frame):
+    """像文字一樣排列：一組一組往右排，寬度不夠就自動換到下一行（視窗窄的筆電也不會被切掉）。
+    用 flow.group() 建一組（裡面用 pack 排），同一組不會被拆開。"""
+
+    def __init__(self, parent, padx=6, pady=2, **kw):
+        super().__init__(parent, **kw)
+        self._items = []
+        self._padx, self._pady = padx, pady
+        self._lastw = 0
+        self._job = None
+        self.configure(height=28)
+        self.bind("<Configure>", self._on_configure)
+
+    def group(self):
+        f = tk.Frame(self, bg=self.cget("bg"))
+        self._items.append(f)
+        self.schedule()
+        return f
+
+    def _on_configure(self, e):
+        if e.width != self._lastw:
+            self._lastw = e.width
+            self.schedule()
+
+    def schedule(self):
+        if self._job is None:
+            self._job = self.after_idle(self.relayout)
+
+    def relayout(self):
+        self._job = None
+        W = self.winfo_width()
+        if W <= 1:
+            W = 10 ** 6
+        x, y, rowh = self._padx, self._pady, 0
+        for f in self._items:
+            w, h = f.winfo_reqwidth(), f.winfo_reqheight()
+            if x + w > W and x > self._padx:
+                x, y, rowh = self._padx, y + rowh + self._pady, 0
+            f.place(x=x, y=y)
+            x += w + self._padx
+            rowh = max(rowh, h)
+        total = y + rowh + self._pady
+        if int(self.cget("height")) != total:
+            self.configure(height=total)
