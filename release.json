@@ -1,16 +1,25 @@
 {
-  "version": "0.5.2",
+  "version": "0.5.3",
   "repo": "Yeep112/MagicTool",
   "branch": "main",
   "date": "2026-11-26",
   "notes": [
-    "修正 Mac：點 Magic Tool.app 閃一下就結束、看不到原因 → 輸出寫進 app_launch.log；pythonw 失敗時自動改用 python 再試；仍失敗會跳出視窗顯示錯誤",
-    "Mac：資料夾找不到、沒有讀取權限（文件 / 桌面 / 下載項目）、Python 不見時，都會跳出說明",
-    "Mac：載入畫面改用一般視窗（macOS 的 Tk 無邊框視窗有時不顯示）；Tk 開不起來時也會顯示錯誤",
-    "Mac：run_magic.command debug 在終端機裡開程式，看所有訊息；舊版的 Magic Tool.app 會自動換成新的啟動腳本",
-    "圖上方的設定列在窄螢幕（例如 1440 寬的 MacBook）會自動換行，不會被切掉"
+    "修正 Mac：App 顯示「No module named magic」→ 原因是 macOS 不讓 App 讀「文件 / 桌面 / 下載項目」；安裝時把程式複製到 ~/Library/Application Support/MagicTool/program，App 用那一份",
+    "Mac：舊的 App 找不到程式時，會自動改用複製過去的那一份；錯誤視窗會說明是不是 macOS 隱私權的問題",
+    "Mac：讀不到量測資料夾時，說明到「系統偏好設定 → 安全性與隱私 → 隱私權」允許 Magic Tool"
   ],
   "history": [
+    {
+      "version": "0.5.2",
+      "date": "2026-11-26",
+      "notes": [
+        "修正 Mac：點 Magic Tool.app 閃一下就結束、看不到原因 → 輸出寫進 app_launch.log；pythonw 失敗時自動改用 python 再試；仍失敗會跳出視窗顯示錯誤",
+        "Mac：資料夾找不到、沒有讀取權限（文件 / 桌面 / 下載項目）、Python 不見時，都會跳出說明",
+        "Mac：載入畫面改用一般視窗（macOS 的 Tk 無邊框視窗有時不顯示）；Tk 開不起來時也會顯示錯誤",
+        "Mac：run_magic.command debug 在終端機裡開程式，看所有訊息；舊版的 Magic Tool.app 會自動換成新的啟動腳本",
+        "圖上方的設定列在窄螢幕（例如 1440 寬的 MacBook）會自動換行，不會被切掉"
+      ]
+    },
     {
       "version": "0.5.1",
       "date": "2026-11-26",

@@ -532,6 +532,30 @@ def check_mac_support(tmp):
         if not shutil.which("osascript"):
             assert "ALERT:" in r.stderr and "python 測試失敗" in r.stderr, r.stderr
         out.append("App 殼：失敗時改用 python 重試、顯示錯誤")
+        # 程式放在「文件」裡：安裝時複製到不受 macOS 隱私權限制的位置
+        from .install import copy_program, mac_protected
+        fake_home = os.path.realpath(os.path.join(tmp, "machome"))
+        old_home = os.environ.get("HOME")
+        os.environ["HOME"] = fake_home
+        try:
+            assert mac_protected(os.path.join(fake_home, "Documents", "MagicTool-main"))
+            assert mac_protected(os.path.join(fake_home, "Downloads", "x"))
+            assert not mac_protected(os.path.join(fake_home, "MagicTool"))
+            assert not mac_protected(os.path.join(fake_home, "Library", "Application Support", "MagicTool", "program"))
+        finally:
+            if old_home is None:
+                os.environ.pop("HOME", None)
+            else:
+                os.environ["HOME"] = old_home
+        dst = copy_program(TOOL_ROOT, os.path.join(tmp, "program"))
+        assert os.path.exists(os.path.join(dst, "magic", "__main__.py")) and not os.path.exists(os.path.join(dst, ".git"))
+        assert os.stat(os.path.join(dst, "run_magic.command")).st_mode & 0o100, "複製後啟動檔要可以執行"
+        dst = copy_program(TOOL_ROOT, os.path.join(tmp, "program"))          # 再裝一次：覆蓋舊的
+        assert not os.path.exists(dst + ".old") and not os.path.exists(dst + ".new")
+        r = subprocess.run([sys.executable, "-c", "import magic, sys; print(magic.__file__)"], cwd=tmp,
+                           env=dict(os.environ, PYTHONPATH=dst), capture_output=True, text=True, timeout=60)
+        assert r.returncode == 0 and r.stdout.strip().startswith(dst), r.stdout + r.stderr
+        out.append("文件資料夾 → 複製程式")
     out.append("Magic Tool.app")
     return "、".join(out)
 

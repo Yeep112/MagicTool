@@ -134,7 +134,8 @@ class FilePanel(tk.Frame):
         def work():
             found = []
             try:
-                walker = os.walk(folder) if deep else [(folder, [], os.listdir(folder))]
+                errs = []
+                walker = os.walk(folder, onerror=errs.append) if deep else [(folder, [], os.listdir(folder))]
                 for root, dirs, names in walker:
                     if deep:
                         dirs[:] = [d for d in dirs if not d.startswith(".") and d != "MagicTool 輸出"]
@@ -150,8 +151,11 @@ class FilePanel(tk.Frame):
                                               size=st.st_size, mtime=st.st_mtime, kind=""))
                     if len(found) > 5000:
                         break
+                if deep and errs and not found and isinstance(errs[0], PermissionError):
+                    raise errs[0]
             except OSError as e:
-                self.app.post(("status", (f"讀不到資料夾：{e}", "error")))
+                from .launcher import permission_hint
+                self.app.post(("status", (f"讀不到資料夾：{e}{permission_hint(e)}", "error")))
                 return
             self.app.post(("files", (self, gen, found, select)))
             # 判斷種類（讀檔頭）：慢一點，分批回報

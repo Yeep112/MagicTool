@@ -49,7 +49,7 @@ def mac_paths():
             "桌面": os.path.join(home, "Desktop", MAC_APP_NAME)}
 
 
-LAUNCHER_MARK = "magic-launcher v2"
+LAUNCHER_MARK = "magic-launcher v3"
 
 
 def refresh_mac_app():
@@ -120,10 +120,12 @@ if [ ! -x "$PY" ] && [ -f "$DATA/python_path.txt" ]; then PY="$(head -n 1 "$DATA
 if [ ! -d "$TOOL" ]; then
     alert "找不到程式資料夾：$TOOL
 
-資料夾搬家或改名了嗎？請到 Magic Tool 資料夾，再執行一次 install.command。"
+資料夾搬家或改名了嗎？或是 macOS 不讓 App 讀這個位置（文件 / 桌面 / 下載項目）？
+請到 Magic Tool 資料夾，用終端機再執行一次 install.command。"
     exit 1
 fi
-if ! cd "$TOOL" 2>>"$LOG" || [ ! -r "$TOOL/magic/__main__.py" ]; then
+if ! cd "$TOOL" 2>>"$LOG" || ! head -c 1 "$TOOL/magic/__main__.py" >/dev/null 2>>"$LOG" \\
+   || ! ls "$TOOL/magic" >/dev/null 2>>"$LOG"; then
     alert "沒有權限讀取程式資料夾：$TOOL
 
 macOS 不讓這個 App 讀「文件 / 桌面 / 下載項目」裡的檔案。請到：
@@ -143,6 +145,7 @@ ARGS=()
 for a in "$@"; do case "$a" in -psn_*) ;; *) ARGS+=("$a") ;; esac; done
 
 export PYTHONUTF8=1 PYTHONIOENCODING=utf-8 MAGIC_LAUNCHER=macapp
+export PYTHONPATH="$TOOL${{PYTHONPATH:+:$PYTHONPATH}}"
 run() {{
     echo "--- $1 -m magic app" >> "$LOG"
     "$1" -m magic app "${{ARGS[@]}}" >> "$LOG" 2>&1
@@ -164,7 +167,14 @@ fi
 echo "結束碼 $code" >> "$LOG"
 if [ $code -ne 0 ] && [ $code -ne 130 ] && [ $code -ne 137 ] && [ $code -ne 143 ]; then
     last=$(tail -n +$((LOG0 + 1)) "$LOG" | grep -v '^[[:space:]]*$' | grep -v -E '^(=====|TOOL=|PY=|ProductName|ProductVersion|BuildVersion|x86_64$|arm64$)' | tail -n 12)
-    alert "Magic Tool 沒有正常開啟（結束碼 $code）。
+    hint=""
+    if grep -q "No module named magic" <(tail -n +$((LOG0 + 1)) "$LOG"); then
+        hint="
+
+看起來是 macOS 不讓 App 讀程式資料夾（放在「文件 / 桌面 / 下載項目」時會這樣）。
+請到程式資料夾，用終端機再執行一次 install.command：新版會把程式複製到不受限制的位置。"
+    fi
+    alert "Magic Tool 沒有正常開啟（結束碼 $code）。$hint
 
 最後的訊息：
 $last
@@ -207,23 +217,74 @@ def make_mac_app(app_path, tool=TOOL_ROOT, python=None):
     return app_path
 
 
+MAC_PROTECTED = ("Documents", "Desktop", "Downloads", os.path.join("Library", "Mobile Documents"))
+COPY_IGNORE = (".git", "__pycache__", "*.pyc", "_backup", "_update_tmp", ".pytest_cache", "MagicTool 輸出", ".DS_Store")
+
+
+def mac_protected(path):
+    """在「文件 / 桌面 / 下載項目 / iCloud」裡？（macOS 不讓從 Finder 開的 App 讀這些地方，除非另外允許）"""
+    home = os.path.realpath(os.path.expanduser("~"))
+    p = os.path.realpath(path)
+    return any(p == os.path.join(home, d) or p.startswith(os.path.join(home, d) + os.sep) for d in MAC_PROTECTED)
+
+
+def mac_program_dir():
+    from .core.settings import data_dir
+    return os.path.join(str(data_dir()), "program")
+
+
+def copy_program(src, dst, log=print):
+    """把程式複製到 dst（先複製到暫存、成功後才換掉舊的，失敗時舊的還在）。"""
+    import shutil
+    src, dst = os.path.realpath(src), os.path.abspath(dst)
+    if src == os.path.realpath(dst):
+        return dst
+    tmp, old = dst + ".new", dst + ".old"
+    for p in (tmp, old):
+        if os.path.exists(p):
+            shutil.rmtree(p, ignore_errors=True)
+    shutil.copytree(src, tmp, ignore=shutil.ignore_patterns(*COPY_IGNORE), symlinks=True)
+    if os.path.exists(dst):
+        os.rename(dst, old)
+    os.rename(tmp, dst)
+    shutil.rmtree(old, ignore_errors=True)
+    from .updater import make_executable
+    make_executable(dst)
+    return dst
+
+
 def install_mac(where=("應用程式", "桌面"), log=print):
     from .gui.launcher import register_paths
     register_paths()
     paths = mac_paths()
     log(f"程式資料夾：{TOOL_ROOT}")
     log(f"Python：{sys.executable}")
+    tool = TOOL_ROOT
+    if mac_protected(TOOL_ROOT):
+        # macOS 不讓 App 讀「文件 / 桌面 / 下載項目」：把程式複製到 ~/Library/Application Support/MagicTool/program
+        prog = mac_program_dir()
+        log("程式放在「文件 / 桌面 / 下載項目」裡，macOS 不讓 App 直接讀這些地方；")
+        log(f"把程式複製到：{prog}")
+        try:
+            tool = copy_program(TOOL_ROOT, prog, log)
+            from .core.settings import data_dir
+            with open(os.path.join(str(data_dir()), "tool_path.txt"), "w", encoding="utf-8") as f:
+                f.write(tool + "\n")
+            log("  ✓ 複製完成（之後 App 用這一份；軟體內的「檢查更新」也會更新這一份）")
+        except Exception as e:
+            log(f"  ✗ 複製失敗：{e}（改用原本的資料夾）")
+            tool = TOOL_ROOT
     ok = []
     app = paths["應用程式"]
     try:
         os.makedirs(os.path.dirname(app), exist_ok=True)
-        make_mac_app(app)
+        make_mac_app(app, tool=tool)
         log(f"  ✓ 應用程式：{app}")
         ok.append(app)
     except Exception as e:
         log(f"  ✗ 應用程式：{e}")
         return ok
-    if "桌面" in where:
+    if "桌面" in where and os.path.isdir(os.path.dirname(paths["桌面"])):
         desk = paths["桌面"]
         try:
             if os.path.lexists(desk):
@@ -242,7 +303,10 @@ def install_mac(where=("應用程式", "桌面"), log=print):
     log("")
     log("完成！之後可以從 Launchpad、Spotlight（搜尋 Magic Tool）或桌面開啟。")
     log("開啟後在 Dock 的圖示上按右鍵 →「選項」→「保留在 Dock」。")
-    log("程式資料夾請不要搬走；要搬的話，搬完重新執行一次 install.command 即可。")
+    if tool != TOOL_ROOT:
+        log(f"App 用的是複製過去的那一份（{tool}）；下載的資料夾之後可以刪掉或搬走。")
+    else:
+        log("程式資料夾請不要搬走；要搬的話，搬完重新執行一次 install.command 即可。")
     return ok
 
 

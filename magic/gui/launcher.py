@@ -39,6 +39,15 @@ def log_dir():
     return path
 
 
+def permission_hint(e):
+    """macOS 的隱私權限制（文件 / 桌面 / 下載項目 / 外接硬碟）→ 說明怎麼允許。"""
+    import errno
+    if sys.platform == "darwin" and isinstance(e, OSError) and e.errno in (errno.EPERM, errno.EACCES):
+        return ("\nmacOS 不允許 Magic Tool 讀這個位置：系統偏好設定 → 安全性與隱私 → 隱私權 →"
+                "「檔案與檔案夾」或「完整磁碟取用權」，允許 Magic Tool（沒有的話按 ＋ 加入「應用程式」裡的 Magic Tool），再重開")
+    return ""
+
+
 def register_paths():
     """記下程式資料夾與 Python 的位置，讓任何地方的啟動檔（複製出去的 run_analysis.bat、捷徑）都找得到。
     檔案：%LOCALAPPDATA%\\MagicTool\\tool_path.txt、python_path.txt（系統預設編碼，cmd 讀得懂）"""

@@ -64,6 +64,11 @@ Mac 打不開時：
 - 在終端機執行 `bash ~/Documents/MagicTool-main/run_magic.command debug`（路徑換成你的資料夾）：
   程式直接在終端機裡開，所有訊息都會顯示出來。
 - App 會先用 Anaconda 的 pythonw 開，失敗時自動改用 python 再試一次。
+- **程式放在「文件 / 桌面 / 下載項目」時**：macOS 不讓從 Finder 開的 App 讀這些資料夾（從終端機可以，所以安裝時正常、點 App 卻失敗，
+  錯誤是「No module named magic」）。所以 `install.command` 會把程式複製到 `~/Library/Application Support/MagicTool/program`，
+  App 用那一份；下載的資料夾之後可以刪掉。軟體內的「檢查更新」也是更新那一份。
+- 量測資料放在「文件」等資料夾時，第一次開啟 macOS 可能會問「是否允許 Magic Tool 取用」→ 按「好」。
+  讀不到時軟體會說明到哪裡允許（系統偏好設定 → 安全性與隱私 → 隱私權 →「檔案與檔案夾」或「完整磁碟取用權」）。
 - 如果提示「沒有權限讀取程式資料夾」：系統偏好設定 → 安全性與隱私 → 隱私權 →「檔案與檔案夾」允許 Magic Tool，
   或把資料夾搬到家目錄（例如 `~/MagicTool`）再執行一次 `install.command`。
 
