@@ -761,6 +761,7 @@ def run_gui(rep, timeout=90):
     import matplotlib
     matplotlib.use("TkAgg")
     from .gui.app import App, prepare
+    from .gui import theme as _T0
     from .core.registry import INSTRUMENTS
     stats = {}
 
@@ -827,6 +828,27 @@ def run_gui(rep, timeout=90):
                 root.update()                       # 包含重新排版與畫面更新的時間
                 switch_ms.append((time.perf_counter() - t1) * 1000)
         switch_total = time.perf_counter() - t0
+        # 拆開量：每一欄（左 / 中 / 右）拿掉再放回去要多久，和元件數（找出切換最花時間的地方）
+        def count(w):
+            return 1 + sum(count(c) for c in w.winfo_children() if c.winfo_manager())
+        panes = {}
+        for key in INSTRUMENTS:
+            app.segment.select(key)
+            root.update()
+            cells = []
+            for f in app.pages[key].frames():
+                ts = []
+                for _ in range(3):
+                    f.grid_remove()
+                    root.update()
+                    t = time.perf_counter()
+                    f.grid()
+                    root.update()
+                    ts.append((time.perf_counter() - t) * 1000)
+                cells.append((sorted(ts)[1], count(f)))
+            panes[key] = cells
+        stats["panes"] = panes
+        stats["screen"] = f"{root.winfo_width()}×{root.winfo_height()}，介面縮放 {getattr(_T0, 'UI_FACTOR', 1):g}"
         # 四頁疊在一起：切換後滑鼠指到的地方，一定要是這一頁的元件（不能被別頁蓋住）
         for key in INSTRUMENTS:
             app.segment.select(key)
@@ -946,7 +968,14 @@ def run_gui(rep, timeout=90):
     lim_sw, lim_bg, lim_anim = 150 * k, 600 * k, 100 * k
 
     def perf():
+        rep.perf = {"switch_med": sw[len(sw) // 2], "switch_max": sw[-1], "bg_gap": max_gap * 1000,
+                    "draw_max": worst_draw * 1000, "anim_max": stats.get("anim_gap", 0) * 1000}
         rep.log(f"    切換時間（ms）：{', '.join(f'{v:.0f}' for v in stats['switch_ms'])}")
+        if stats.get("panes"):
+            rep.log(f"    每一欄重新顯示（ms / 顯示中的元件數；視窗 {stats.get('screen', '')}）：")
+            for key, cells in stats["panes"].items():
+                rep.log(f"      {key:8s} " + "　".join(f"{n} {t:.0f} ms / {c} 個"
+                                                     for n, (t, c) in zip(("左", "中", "右"), cells)))
         if k != 1:
             rep.log(f"    （雲端測試機：門檻放寬 {k:g} 倍；真正的流暢度門檻在你電腦上的 publish / 收更新 檢查）")
         if sw[-1] > lim_sw:
@@ -957,8 +986,6 @@ def run_gui(rep, timeout=90):
             raise AssertionError(f"蝕刻動畫最多卡住 {stats['anim_gap'] * 1000:.0f} ms（> {lim_anim:.0f} ms）")
         if not stats["fixed_ok"]:
             raise AssertionError("固定大小時圖被壓縮或沒有出現捲軸")
-        rep.perf = {"switch_med": sw[len(sw) // 2], "switch_max": sw[-1], "bg_gap": max_gap * 1000,
-                    "draw_max": worst_draw * 1000, "anim_max": stats.get("anim_gap", 0) * 1000}
         return (f"切換機台 中位數 {sw[len(sw) // 2]:.1f} ms、最慢 {sw[-1]:.1f} ms；"
                 f"背景計算時畫面最長停頓 {max_gap * 1000:.0f} ms；單張圖最久繪製 {worst_draw * 1000:.0f} ms；"
                 f"蝕刻動畫最長一格 {stats.get('anim_gap', 0) * 1000:.0f} ms")
@@ -1175,6 +1202,19 @@ def _gui_03(app, root, pump, ep):
         root.update()
         assert not app.pend_bar.winfo_ismapped()
         app.state.pop("pending_dismissed", None)
+        # ---- 圖標題與樣式列：預設收起；打開後切到別台也是打開的；再收起
+        cur = app.current.right
+        assert not cur.style_bar.winfo_ismapped(), "樣式列預設應該收起來"
+        cur.toggle_style()
+        root.update()
+        assert cur.style_bar.winfo_ismapped() and app.view["style_open"]
+        other = next(k for k in app.pages if app.pages[k] is not app.current)
+        app.segment.select(other)
+        root.update()
+        assert app.pages[other].right.style_bar.winfo_ismapped(), "切到別台時樣式列沒有跟著打開"
+        app.pages[other].right.toggle_style()
+        root.update()
+        assert not app.pages[other].right.style_bar.winfo_ismapped() and not app.view["style_open"]
     finally:
         messagebox.askyesno, messagebox.showinfo, messagebox.showwarning = saved
 
@@ -1253,8 +1293,8 @@ def main(gui=True, log=print, require_gui=False):
         else:
             os.environ["MAGIC_DATA"] = old_env
         shutil.rmtree(tmp, ignore_errors=True)
-    if require_gui and rep.perf and perf_factor() == 1 and not rep.failed:
-        _record_perf(rep.perf, real_data, log)
+    if require_gui and rep.perf and perf_factor() == 1:
+        _record_perf(rep.perf, real_data, log)                      # 沒通過也記下來（才知道差多少）
     if rep.failed:
         log(f"\n✗ {len(rep.failed)} / {rep.n} 項沒有通過：{'、'.join(rep.failed)}")
         return False

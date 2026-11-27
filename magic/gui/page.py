@@ -108,6 +108,7 @@ class Page:
         # ---- 右：圖
         self.right = FigurePanel(app.right_host, key, app.view, app.on_view_change)
         self.right.is_active = lambda: self.app.current is self    # 被蓋住的頁面：視窗大小改變時先不重新排版
+        self.right.on_view_change_light = self.app.save_state_soon
         tools = self.right.tools
         tools.get_ov = lambda: self.st.setdefault("fig", {}).setdefault(self.current.name if self.current else "", {})
         tools.save = self.app.save_state_soon

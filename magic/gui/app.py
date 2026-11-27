@@ -36,7 +36,7 @@ from .widgets import Paned, Segmented, card
 
 VIEW_DEFAULTS = dict(size_mode="填滿視窗", fig_w=1100, fig_h=650, grid=True, font="中",
                      xlabel=12, ylabel=12, cbar=12, ticks=10, legend=8, title=11, suptitle=15,
-                     suptitle_bold=True, fig_title="")
+                     suptitle_bold=True, fig_title="", style_open=False)
 
 
 class App:

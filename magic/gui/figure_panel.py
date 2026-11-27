@@ -212,8 +212,15 @@ class FigurePanel(tk.Frame):
     # ------------------------------------------------------------------ 樣式列
     def _build_style_bar(self):
         from .widgets import Flow
+        # 平常收起來：這三列約 55 個元件，佔右欄的六成；Windows 上每個元件都是一個小視窗，
+        # 切換機台時要一個一個重畫。收起來時切換快很多，要改再按「🎨 圖標題與樣式」打開（所有機台一起）。
+        head = tk.Frame(self, bg=T.CARD)
+        head.pack(fill="x", pady=(6, 0))
+        self.style_btn = ttk.Button(head, text="", style=f"{self.key}.Small.TButton", command=self.toggle_style)
+        self.style_btn.pack(side="left")
+        self.style_head = head
         bar = tk.Frame(self, bg=T.SUBTLE, highlightthickness=1, highlightbackground=T.BORDER)
-        bar.pack(fill="x", pady=(8, 0))
+        self.style_bar = bar
         rows = []
         for _ in range(3):                    # 三列：圖標題 / 圖的大小 / 圖表樣式；窄視窗時每列自動換行
             r = Flow(bar, bg=T.SUBTLE)
@@ -274,6 +281,26 @@ class FigurePanel(tk.Frame):
         for e in (ew, eh):
             e.bind("<Return>", lambda ev: self._style_changed())
             e.bind("<FocusOut>", lambda ev: self._style_changed())
+        self.sync_style_open()
+
+    def toggle_style(self):
+        self.view["style_open"] = not self.view.get("style_open", False)
+        self.sync_style_open()
+        try:
+            self.on_view_change_light()
+        except Exception:
+            pass
+
+    on_view_change_light = staticmethod(lambda: None)    # 頁面設定：只存設定、不重畫
+
+    def sync_style_open(self):
+        """樣式列打開 / 收起（所有機台共用同一個設定；其他頁面切換過來時才跟著改）。"""
+        is_open = bool(self.view.get("style_open", False))
+        self.style_btn.configure(text="▾ 收起圖標題與樣式" if is_open else "🎨 圖標題與樣式（圖的大小、字體、格線）▸")
+        if is_open and not self.style_bar.winfo_manager():
+            self.style_bar.pack(fill="x", pady=(4, 0), after=self.style_head)
+        elif not is_open and self.style_bar.winfo_manager():
+            self.style_bar.pack_forget()
 
     def _build_title_row(self, row, lab):
         """圖標題：新增 / 修改 / 移除；可以用 {日期}{機台}{功能}{檔名}；套用範圍：這個功能 / 這台機台 / 所有圖。"""
@@ -472,6 +499,7 @@ class FigurePanel(tk.Frame):
     _layout_dirty = False
 
     def on_show(self):
+        self.sync_style_open()
         if self._layout_dirty:
             self._layout_dirty = False
             self.schedule_layout()
