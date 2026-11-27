@@ -13,7 +13,7 @@ from tkinter import filedialog, messagebox, ttk
 from .. import __version__
 from ..core import settings as S
 from . import theme as T
-from .widgets import ScrollFrame
+from .widgets import ScrollFrame, auto_wrap, fit_label, fit_window
 
 
 def sheet_status(cfg):
@@ -57,7 +57,9 @@ class SettingsDialog(tk.Toplevel):
         self.title("設定")
         self.configure(bg=T.CARD)
         self.transient(app.root)
-        self.geometry(f"{T.px(720)}x{T.px(560)}")
+        fit_window(self, T.px(720), T.px(560), T.px(560), T.px(380))
+        bf = tk.Frame(self, bg=T.CARD)                              # 按鈕先放在最下面（視窗矮時不會被擠掉）
+        bf.pack(side="bottom", fill="x", padx=12, pady=(0, 12))
         nb = ttk.Notebook(self)
         nb.pack(fill="both", expand=True, padx=10, pady=10)
         self.nb = nb
@@ -67,11 +69,11 @@ class SettingsDialog(tk.Toplevel):
         self._etching_tab(nb)
         self._look_tab(nb)
         self._update_tab(nb)
-        bf = tk.Frame(self, bg=T.CARD)
-        bf.pack(fill="x", padx=12, pady=(0, 12))
-        tk.Label(bf, text=f"設定檔：{S.settings_path()}", bg=T.CARD, fg=T.FAINT, font=T.font(8)).pack(side="left")
         ttk.Button(bf, text="儲存", style="Neutral.Accent.TButton", command=self.save).pack(side="right")
         ttk.Button(bf, text="取消", style="Neutral.Ghost.TButton", command=self.destroy).pack(side="right", padx=6)
+        fit_label(tk.Label(bf, text=f"設定檔：{S.settings_path()}", bg=T.CARD, fg=T.FAINT, font=T.font(8), anchor="w",
+                           justify="left")).pack(side="left", fill="x", expand=True)
+        auto_wrap(self, 20)                                  # 長說明跟著視窗寬度換行
         if tab in self._tabs:
             nb.select(self._tabs[tab])
         self.bind("<Escape>", lambda e: self.destroy())

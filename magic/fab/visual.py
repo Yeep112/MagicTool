@@ -336,11 +336,13 @@ def _match_flakes(layers, flakes, extras=True):
         else:
             nm = _norm(m)
             cand = [k for k, o in enumerate(flakes) if k not in used and _norm(o["name"]) == nm]
-            if not cand and nm == "sample":
-                cand = [k for k, o in enumerate(flakes) if k not in used and "hbn" not in _norm(o["name"])]
+            if not cand and nm == "sample":                # 樣品類型沒寫材料：用輪廓檔的名稱（石墨烯排後面）
+                cand = sorted((k for k, o in enumerate(flakes) if k not in used and "hbn" not in _norm(o["name"])),
+                              key=lambda k: _norm(flakes[k]["name"]) in ("graphene", "graphite", "gr"))
         if cand:
             used.add(cand[0])
-            out.append((m, t, flakes[cand[0]]))
+            o = flakes[cand[0]]
+            out.append((o["name"] if _norm(m) == "sample" else m, t, o))
         else:
             out.append((m, t, None))
     extra = [(o["name"], None, o) for k, o in enumerate(flakes) if k not in used] if extras else []
@@ -438,7 +440,14 @@ def read_outline(path):
 def outline_name(path):
     stem = os.path.splitext(os.path.basename(path))[0]
     k = re.sub(r"[^a-z0-9]", "", stem.lower())
-    return TOP_ALIASES.get(k, stem)
+    if k in TOP_ALIASES:
+        return TOP_ALIASES[k]
+    if "hbn" in k:                                         # hBN_top、top-hBN、hBN_bottom、bot hBN…
+        if "top" in k or k.startswith(("t", "u")) or k.endswith(("t", "up")):
+            return "top hBN"
+        if "bot" in k or k.startswith("b") or k.endswith("b"):
+            return "bottom hBN"
+    return stem
 
 
 def find_outlines(sample_dir, max_depth=3, limit=40):
@@ -542,9 +551,9 @@ def draw_section(ax, rec, upto=None, lang="zh", title=True, highlight=True, outl
         if cur_name in sec.missing and upto is not None:
             nm = "contact" if "contact" in cur_name.lower() else cur_name.split()[0].lower()
             num = re.findall(r"#(\d+)", cur_name)
-            ax.text(0.5, 0.55, (f"{cur_name}：沒有 {nm}{num[0] if num and num[0] != '1' else ''}.csv 輪廓，剖面沒有畫這一步"
-                                if lang == "zh" else f"{cur_name}: no outline file, not drawn"),
-                    transform=ax.transAxes, ha="center", fontsize=8, color="#b45309")
+            ax.text(0.99, 0.985, (f"{cur_name}：沒有 {nm}{num[0] if num and num[0] != '1' else ''}.csv 輪廓，剖面沒有畫這一步"
+                                  if lang == "zh" else f"{cur_name}: no outline file, not drawn"),
+                    transform=ax.transAxes, ha="right", va="top", fontsize=8, color="#b45309")
     ax.set_ylabel("nm", fontsize=8)
     ax.tick_params(labelsize=7)
     for sp in ("top", "right", "bottom"):

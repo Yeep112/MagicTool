@@ -124,8 +124,25 @@ class ScrollFrame(tk.Frame):
         self.canvas.bind_all("<Button-5>", lambda e: self._scroll(2))
 
     def _unbind_wheel(self, _=None):
-        for ev in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
-            self.canvas.unbind_all(ev)
+        """滑鼠移到裡面的元件上（例如圖、按鈕）也算還在裡面：真的離開才取消滾輪。"""
+        def check():
+            try:
+                w = self.winfo_containing(*self.winfo_pointerxy())
+            except Exception:
+                w = None
+            while w is not None:
+                if w is self:
+                    return
+                w = getattr(w, "master", None)
+            for ev in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+                try:
+                    self.canvas.unbind_all(ev)
+                except tk.TclError:
+                    pass
+        try:
+            self.after_idle(check)
+        except tk.TclError:
+            pass
 
     def _scroll(self, n):
         top, bottom = self.canvas.yview()
@@ -142,6 +159,146 @@ class ScrollFrame(tk.Frame):
 
     def to_top(self):
         self.canvas.yview_moveto(0)
+
+
+class WrapRow(tk.Frame):
+    """一排按鈕：寬度不夠就自動換到下一行（不會被擠扁、文字不會被切掉）。
+
+    row = WrapRow(parent); ttk.Button(row, …) 建好之後 row.add(按鈕, side="left" / "right", expand=False)。
+    依目前寬度把元件分到幾行；分法沒變就不重排（切換頁面時不會多做事）。"""
+
+    def __init__(self, parent, bg=None, padx=4, pady=2, **kw):
+        super().__init__(parent, bg=bg if bg is not None else parent.cget("bg"), **kw)
+        self.padx, self.pady = padx, pady
+        self._items = []
+        self._rows = []
+        self._plan = None
+        self._width = 0
+        self.bind("<Configure>", self._on_conf, add="+")
+
+    def add(self, w, side="left", expand=False, padx=None):
+        self._items.append((w, side, expand, self.padx if padx is None else padx))
+        self._plan = None
+        self._relayout()
+        return w
+
+    def set_visible(self, w, show=True):
+        """顯示 / 隱藏其中一個元件（例如「建立紀錄檔」只有還沒有紀錄檔時才出現）。"""
+        hidden = getattr(self, "_hidden", set())
+        self._hidden = hidden
+        if (w not in hidden) == bool(show):
+            return
+        (hidden.discard if show else hidden.add)(w)
+        self._plan = None
+        self._relayout()
+
+    def _on_conf(self, e):
+        if abs(e.width - self._width) > 1:
+            self._width = e.width
+            self._relayout()
+
+    def _relayout(self):
+        width = self._width if self._width > 1 else 10 ** 6
+        rows, used = [[]], 0
+        hidden = getattr(self, "_hidden", set())
+        for i, (w, side, exp, px) in enumerate(self._items):
+            if w in hidden:
+                continue
+            need = w.winfo_reqwidth() + px
+            if rows[-1] and used + need > width:
+                rows.append([])
+                used = 0
+            rows[-1].append(i)
+            used += need
+        plan = tuple(tuple(r) for r in rows)
+        if plan == self._plan:
+            return
+        self._plan = plan
+        while len(self._rows) < len(rows):
+            self._rows.append(tk.Frame(self, bg=self.cget("bg")))
+        for w, *_ in self._items:
+            w.pack_forget()
+        for k, fr in enumerate(self._rows):
+            if k < len(rows):
+                fr.pack(fill="x", pady=(0 if k == 0 else self.pady, 0))
+            else:
+                fr.pack_forget()
+        for k, r in enumerate(rows):
+            fr = self._rows[k]
+            lefts = [i for i in r if self._items[i][1] != "right"]
+            rights = [i for i in r if self._items[i][1] == "right"]
+            for n, i in enumerate(lefts):
+                w, _, exp, px = self._items[i]
+                w.pack(in_=fr, side="left", padx=(0 if n == 0 else px, 0), fill="x" if exp else None, expand=exp)
+                w.lift(fr)
+            for n, i in enumerate(reversed(rights)):
+                w, _, exp, px = self._items[i]
+                w.pack(in_=fr, side="right", padx=(px, 0) if n < len(rights) - 1 or lefts else (0, 0),
+                       fill="x" if exp else None, expand=exp)
+                w.lift(fr)
+
+
+def fit_label(label, pad=2):
+    """文字跟著實際寬度換行（欄位變窄時不會被切掉）。"""
+    def on(e):
+        try:
+            inner = 2 * (int(float(str(label.cget("padx")))) + int(float(str(label.cget("bd")))) +
+                         int(float(str(label.cget("highlightthickness")))))
+        except (ValueError, tk.TclError):
+            inner = 0
+        w = e.width - pad - inner
+        if w > 30:
+            try:
+                cur = int(float(str(label.cget("wraplength") or 0)))
+            except (ValueError, tk.TclError):
+                cur = 0
+            if abs(cur - w) > 2:
+                label.configure(wraplength=w)
+    label.bind("<Configure>", on, add="+")
+    return label
+
+
+def auto_wrap(container, min_len=18):
+    """把 container 裡面的長文字 Label 都設成跟著寬度換行。"""
+    for w in container.winfo_children():
+        if w.winfo_class() == "Label" and not getattr(w, "_no_wrap", False):
+            try:
+                text = str(w.cget("text") or "")
+            except tk.TclError:
+                text = ""
+            if len(text) >= min_len and not str(w.cget("image") or ""):
+                fit_label(w)
+        auto_wrap(w, min_len)
+
+
+def fit_window(win, w, h, minw=None, minh=None, center=True):
+    """視窗大小不超過螢幕（扣掉工作列與標題列），放在螢幕裡面。內容比視窗大的部分要用 ScrollFrame 捲動。"""
+    try:
+        sw, sh = win.winfo_screenwidth(), win.winfo_screenheight()
+    except tk.TclError:
+        return
+    w, h = max(200, min(int(w), sw - 40)), max(150, min(int(h), sh - 100))
+    geo = f"{w}x{h}"
+    if center:
+        try:
+            m = win.master.winfo_toplevel()
+            x = m.winfo_rootx() + (m.winfo_width() - w) // 2
+            y = m.winfo_rooty() + (m.winfo_height() - h) // 3
+        except (tk.TclError, AttributeError):
+            x, y = (sw - w) // 2, (sh - h) // 3
+        x, y = max(0, min(x, sw - w - 10)), max(0, min(y, sh - h - 60))
+        geo += f"+{x}+{y}"
+    win.geometry(geo)
+    win.minsize(min(int(minw or 300), w), min(int(minh or 200), h))
+
+
+def fit_to_content(win, extra_w=0, extra_h=0, minw=None, minh=None):
+    """依內容需要的大小開視窗（超過螢幕就縮到螢幕大小，剩下的靠捲動）。"""
+    try:
+        win.update_idletasks()
+        fit_window(win, win.winfo_reqwidth() + extra_w, win.winfo_reqheight() + extra_h, minw, minh)
+    except tk.TclError:
+        pass
 
 
 class Segmented(tk.Frame):

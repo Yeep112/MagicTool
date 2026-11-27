@@ -130,14 +130,18 @@ def main():
         if mgr not in ("pack", "grid"):
             return None
         info = w.pack_info() if mgr == "pack" else w.grid_info()
-        info.pop("in", None)
-        sib = [c for c in w.master.pack_slaves()] if mgr == "pack" else []
+        cont = info.pop("in", None) or w.master             # 自動換行的按鈕列：按鈕放在裡面的「行」
+        if mgr == "pack":
+            info["in_"] = cont
+        sib = [c for c in cont.pack_slaves()] if mgr == "pack" else []
         ts = []
         for _ in range(3):
             (w.pack_forget if mgr == "pack" else w.grid_remove)()
             root.update()
             t = time.perf_counter()
             if mgr == "pack":
+                if w not in sib:
+                    return None
                 i = sib.index(w)
                 nxt = sib[i + 1] if i + 1 < len(sib) else None
                 w.pack(**info, **({"before": nxt} if nxt is not None else {}))
