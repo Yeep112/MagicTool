@@ -468,8 +468,19 @@ class FigurePanel(tk.Frame):
                 pass
         self._layout_job = self.after(80, self.layout)
 
+    is_active = staticmethod(lambda: True)       # 頁面設定：這頁是不是目前顯示的那一頁
+    _layout_dirty = False
+
+    def on_show(self):
+        if self._layout_dirty:
+            self._layout_dirty = False
+            self.schedule_layout()
+
     def layout(self):
         self._layout_job = None
+        if not self.is_active():
+            self._layout_dirty = True                # 被蓋住：等切換回來再排版、重畫（不浪費時間畫看不到的圖）
+            return
         try:
             aw, ah = int(self.host.winfo_width()), int(self.host.winfo_height())
         except (tk.TclError, ValueError):

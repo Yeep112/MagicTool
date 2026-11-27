@@ -140,7 +140,7 @@ class EtchWizard(tk.Toplevel):
         self.tau_lab = tk.Label(ctl, text="", bg=T.CARD, fg=T.MUTED, font=T.font(9), width=16, anchor="w")
         self.tau_lab.pack(side="left")
 
-    def select_stage(self, i):
+    def select_stage(self, i, redraw=True):
         self.stage = i
         for k, b in enumerate(self.stage_btns):
             on = k == i
@@ -150,7 +150,7 @@ class EtchWizard(tk.Toplevel):
         self.stage_text.configure(text=f"{num} {name}：{text}")
         tau = self.tau_var.get() if i == 4 else None
         self.canvas.tip_x = None if i != 6 else self.canvas.tip_x
-        self.canvas.set_stage(i, tau)
+        self.canvas.set_stage(i, tau, redraw=redraw)
 
     def _scrub(self):
         if self.stage != 4:
@@ -170,7 +170,7 @@ class EtchWizard(tk.Toplevel):
 
     def play_etch(self):
         self.stop()
-        self.select_stage(4)
+        self.select_stage(4, redraw=False)            # 下面的第一格會畫，不用先畫一次（第一格不會多花一倍時間）
         self.tau_var.set(0.0)
         self.canvas.tau = 0.0
         self.canvas.particles = []

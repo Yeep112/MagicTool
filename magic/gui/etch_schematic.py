@@ -86,13 +86,14 @@ class Schematic(tk.Canvas):
         self.vals = dict(vals)
         self.redraw()
 
-    def set_stage(self, stage, tau=None):
+    def set_stage(self, stage, tau=None, redraw=True):
         self.stage = stage
         if tau is not None:
             self.tau = tau
         if stage != 4:
             self.particles = []
-        self.redraw()
+        if redraw:
+            self.redraw()
 
     def set_highlight(self, key):
         self.highlight = key

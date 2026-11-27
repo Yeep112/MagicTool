@@ -20,6 +20,12 @@ sys.path.insert(0, ROOT)
 pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="需要 git")
 
 
+@pytest.fixture(autouse=True)
+def appdata(tmp_path, monkeypatch):
+    monkeypatch.setenv("MAGIC_DATA", str(tmp_path / "appdata"))
+    os.makedirs(tmp_path / "appdata", exist_ok=True)
+
+
 def git(cwd, *args):
     r = subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "-c", "init.defaultBranch=main", *args],
                        cwd=cwd, capture_output=True, text=True, encoding="utf-8")
@@ -161,3 +167,62 @@ def test_local_behind_catches_up(repos, tmp_path):
     ok, log = receive(mine)
     assert ok, log
     assert git(origin, "rev-parse", "main") == sha
+
+
+def test_result_file_written(repos):
+    """收完會寫 receive_result.json，開著的軟體靠它知道要不要提示重新開啟。"""
+    from magic import updater
+    origin, mine, claude = repos
+    push_pending(claude, "1.0.1")
+    ok, _ = receive(mine)
+    r = updater.read_receive_result()
+    assert ok and r["ok"] and r["version"] == "1.0.1" and r["finished"] >= r["started"]
+    push_pending(claude, "1.0.2")
+    ok, _ = receive(mine, publish_ok=False)
+    r = updater.read_receive_result()
+    assert not ok and not r["ok"] and r["version"] == "1.0.1"        # 沒發佈：資料夾還是 1.0.1
+
+
+def test_pending_info():
+    """軟體上方的「有新版本待發佈」：用假的 GitHub API 回應。"""
+    import urllib.error
+    from magic import updater
+
+    def api(responses):
+        def get(url):
+            for key, val in responses.items():
+                if key in url:
+                    if isinstance(val, Exception):
+                        raise val
+                    return val
+            raise AssertionError(url)
+        return get
+
+    ci = lambda repo, sha: ("success", "全部通過")
+    info = updater.pending_info("o/r", "main", get_json=api({
+        "/compare/": {"status": "ahead", "ahead_by": 2, "commits": [{"sha": "a"}, {"sha": "b"}]},
+        "release.json": {"version": "0.5.5", "notes": ["加快切換", "待發佈提示"]}}), ci=ci)
+    assert info["ahead"] == 2 and info["sha"] == "b" and info["version"] == "0.5.5"
+    assert info["notes"] == ["加快切換", "待發佈提示"] and info["ci"] == ("success", "全部通過")
+    same = updater.pending_info("o/r", "main", get_json=api({"/compare/": {"status": "identical", "ahead_by": 0}}),
+                                ci=ci)
+    assert same is None
+    gone = urllib.error.HTTPError("u", 404, "Not Found", {}, None)
+    assert updater.pending_info("o/r", "main", get_json=api({"/compare/": gone}), ci=ci) is None
+
+
+def test_perf_history(tmp_path):
+    """流暢度紀錄：存檔、讀回、和上一次比較（明顯變慢會標出來）。"""
+    from magic.core import perfhist
+    assert perfhist.last(tmp_path) is None
+    lines, slower = perfhist.compare(None, {})
+    assert "第一次" in lines[0] and not slower
+    a = perfhist.append({"switch_med": 30, "switch_max": 50, "bg_gap": 200, "draw_max": 80, "anim_max": 20},
+                        "0.5.4", tmp_path)
+    assert perfhist.last(tmp_path)["switch_max"] == "50.0"
+    b = perfhist.append({"switch_med": 40, "switch_max": 90, "bg_gap": 210, "draw_max": 50, "anim_max": 22},
+                        "0.5.5", tmp_path)
+    lines, slower = perfhist.compare(a, b)
+    assert slower == ["切換機台最慢"], (lines, slower)              # 50 → 90：慢 80% 而且多 40 ms
+    assert any("變快" in l and "單張圖" in l for l in lines)         # 80 → 50
+    assert len(perfhist.read_all(tmp_path)) == 2

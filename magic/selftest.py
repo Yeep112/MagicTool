@@ -31,6 +31,23 @@ def perf_factor():
         return 1.0
 
 
+def _record_perf(values, base, log=print):
+    """發佈前檢查（你電腦上）量到的流暢度存起來，並和這台電腦上一次比較。"""
+    try:
+        from . import __version__
+        from .core import perfhist
+        prev = perfhist.last(base)
+        cur = perfhist.append(values, __version__, base)
+        lines, slower = perfhist.compare(prev, cur)
+        log("")
+        for line in lines:
+            log("  " + line)
+        if slower:
+            log(f"  ⚠ {'、'.join(slower)} 比上一版明顯變慢（還在門檻內，所以可以發佈；把這段貼給 Claude 可以查原因）")
+    except Exception as e:
+        log(f"  （流暢度紀錄沒有存成功：{e}）")
+
+
 def _has_tk(python):
     import subprocess
     try:
@@ -810,6 +827,16 @@ def run_gui(rep, timeout=90):
                 root.update()                       # 包含重新排版與畫面更新的時間
                 switch_ms.append((time.perf_counter() - t1) * 1000)
         switch_total = time.perf_counter() - t0
+        # 四頁疊在一起：切換後滑鼠指到的地方，一定要是這一頁的元件（不能被別頁蓋住）
+        for key in INSTRUMENTS:
+            app.segment.select(key)
+            root.update()
+            for f in app.pages[key].frames():
+                x = f.winfo_rootx() + f.winfo_width() // 2
+                y = f.winfo_rooty() + f.winfo_height() // 2
+                w = root.winfo_containing(x, y)
+                assert w is not None and str(w).startswith(str(f)), \
+                    f"切換到 {key} 後，畫面上看到的是 {w}（應該在 {f} 裡）：頁面被蓋住了"
         # 背景計算時畫面不能卡住：選很多 Raman 檔一次算
         page = app.pages["Raman"]
         app.segment.select("Raman")
@@ -930,6 +957,8 @@ def run_gui(rep, timeout=90):
             raise AssertionError(f"蝕刻動畫最多卡住 {stats['anim_gap'] * 1000:.0f} ms（> {lim_anim:.0f} ms）")
         if not stats["fixed_ok"]:
             raise AssertionError("固定大小時圖被壓縮或沒有出現捲軸")
+        rep.perf = {"switch_med": sw[len(sw) // 2], "switch_max": sw[-1], "bg_gap": max_gap * 1000,
+                    "draw_max": worst_draw * 1000, "anim_max": stats.get("anim_gap", 0) * 1000}
         return (f"切換機台 中位數 {sw[len(sw) // 2]:.1f} ms、最慢 {sw[-1]:.1f} ms；"
                 f"背景計算時畫面最長停頓 {max_gap * 1000:.0f} ms；單張圖最久繪製 {worst_draw * 1000:.0f} ms；"
                 f"蝕刻動畫最長一格 {stats.get('anim_gap', 0) * 1000:.0f} ms")
@@ -1120,6 +1149,32 @@ def _gui_03(app, root, pump, ep):
         assert fp is not None and os.path.exists(fp), "沒有產生錯誤回報 zip"
         os.remove(fp)
         dlg.destroy()
+        # ---- 「有新版本待發佈」提示列（開發者）：通過 / 還在跑 / 沒通過、稍後
+        info = {"ahead": 2, "sha": "abc", "version": "9.9.9", "notes": ["加快切換機台", "待發佈提示", "第三項", "第四項"]}
+        app._on_pending_info({**info, "ci": ("success", "全部通過")})
+        pump(lambda: app.pend_bar is not None and app.pend_bar.winfo_ismapped(), 3)
+        assert app.pend_bar.winfo_ismapped(), "待發佈提示列沒有出現"
+        assert "v9.9.9" in app.pend_title.cget("text") and "全部通過" in app.pend_title.cget("text")
+        assert "共 4 項" in app.pend_sub.cget("text") and str(app.pend_btn.cget("state")) == "normal"
+        app._on_pending_info({**info, "ci": ("failure", "沒有通過：Mac")})
+        root.update()
+        assert str(app.pend_btn.cget("state")) == "disabled", "雲端測試沒過時不能按收更新"
+        app._on_pending_info({**info, "ci": ("running", "還在跑")})
+        root.update()
+        assert "還在跑" in app.pend_title.cget("text") and str(app.pend_btn.cget("state")) == "normal"
+        app._dismiss_pending()
+        root.update()
+        assert not app.pend_bar.winfo_ismapped(), "按「稍後」後應該隱藏"
+        app._on_pending_info({**info, "ci": ("success", "")})              # 同一版：稍後就不再跳出
+        root.update()
+        assert not app.pend_bar.winfo_ismapped()
+        app._on_pending_info({**info, "sha": "def", "ci": ("success", "")})  # 有更新的待發佈版本：再出現
+        root.update()
+        assert app.pend_bar.winfo_ismapped()
+        app._on_pending_info(None)                                         # 已經發佈：隱藏
+        root.update()
+        assert not app.pend_bar.winfo_ismapped()
+        app.state.pop("pending_dismissed", None)
     finally:
         messagebox.askyesno, messagebox.showinfo, messagebox.showwarning = saved
 
@@ -1166,11 +1221,14 @@ def main(gui=True, log=print, require_gui=False):
     from .core.settings import TOOL_ROOT
     from .testdata import write_all
     tmp = tempfile.mkdtemp(prefix="magic_selftest_")
+    from .core.settings import data_dir
+    real_data = data_dir()                                          # 流暢度紀錄存在真正的設定資料夾
     old_env = os.environ.get("MAGIC_DATA")
     os.environ["MAGIC_DATA"] = os.path.join(tmp, "appdata")        # 設定與紀錄寫到暫存資料夾
     os.environ.setdefault("MPLBACKEND", "Agg")
     rep = Report(log)
     rep.require_gui = require_gui
+    rep.perf = None
     log(f"Magic Tool 自我測試（{TOOL_ROOT}）" + ("　［發佈前檢查：含實際開視窗與流暢度］" if require_gui else ""))
     try:
         from . import __version__
@@ -1195,6 +1253,8 @@ def main(gui=True, log=print, require_gui=False):
         else:
             os.environ["MAGIC_DATA"] = old_env
         shutil.rmtree(tmp, ignore_errors=True)
+    if require_gui and rep.perf and perf_factor() == 1 and not rep.failed:
+        _record_perf(rep.perf, real_data, log)
     if rep.failed:
         log(f"\n✗ {len(rep.failed)} / {rep.n} 項沒有通過：{'、'.join(rep.failed)}")
         return False

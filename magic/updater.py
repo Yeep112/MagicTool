@@ -20,6 +20,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+import urllib.error
 import urllib.request
 import zipfile
 
@@ -579,7 +580,40 @@ def _publish_subprocess(root, log=print, ask=None, test=True):
     return subprocess.call([_sys.executable, "-m", "magic", "publish"], cwd=root, env=env) == 0
 
 
+RECEIVE_RESULT = "receive_result.json"
+
+
+def receive_result_path():
+    from .core.settings import data_dir
+    return os.path.join(str(data_dir()), RECEIVE_RESULT)
+
+
+def read_receive_result():
+    try:
+        with open(receive_result_path(), encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
 def receive(log=print, ask=input, root=None, test=True, ci=ci_status, do_publish=_publish_subprocess):
+    """收更新（見 _receive）。結束時把結果寫到設定資料夾的 receive_result.json，
+    讓開著的 Magic Tool 知道收完了（成功 → 提示重新開啟）。"""
+    root = root or TOOL_ROOT
+    t0 = time.time()
+    ok = False
+    try:
+        ok = _receive(log=log, ask=ask, root=root, test=test, ci=ci, do_publish=do_publish)
+        return ok
+    finally:
+        try:
+            with open(receive_result_path(), "w", encoding="utf-8") as f:
+                json.dump({"ok": bool(ok), "version": disk_version(root), "started": t0, "finished": time.time()}, f)
+        except OSError:
+            pass
+
+
+def _receive(log=print, ask=input, root=None, test=True, ci=ci_status, do_publish=_publish_subprocess):
     """收更新：抓 GitHub 上的 pending 分支 → 確認雲端測試（Windows + Mac）通過 → 套用到 main →
     在你的電腦上實際開視窗測流暢度（publish 的發佈前檢查）→ 發佈。任何一步沒過就停下來，資料夾恢復原狀。"""
     root = root or TOOL_ROOT
@@ -677,3 +711,69 @@ def receive(log=print, ask=input, root=None, test=True, ci=ci_status, do_publish
         log("\n這次沒有發佈，資料夾已經恢復成收更新之前的版本（同事那邊完全沒有影響）。")
         log("把上面 ✗ 的訊息貼給 Claude 修正後，再按一次 收更新。")
     return False
+
+
+def _api_json(url, timeout=10):
+    req = urllib.request.Request(url, headers={"User-Agent": "MagicTool-updater",
+                                               "Accept": "application/vnd.github+json"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read().decode("utf-8"))
+
+
+def pending_info(repo=None, branch=None, timeout=10, get_json=None, ci=None):
+    """GitHub 上的 pending 是否比 main 新（有 Claude 準備好、還沒發佈的更新）。只用 GitHub 網頁 API，不需要 git。
+    回傳 None（沒有待發佈）或 {ahead, sha, version, notes, ci: (狀態, 說明)}。"""
+    rel = read_release()
+    repo = repo or rel.get("repo", "")
+    branch = branch or rel.get("branch", "main")
+    if not repo:
+        return None
+    get_json = get_json or (lambda url: _api_json(url, timeout))
+    try:
+        cmp = get_json(f"https://api.github.com/repos/{repo}/compare/{branch}...{PENDING_BRANCH}")
+    except urllib.error.HTTPError as e:
+        if e.code == 404:                               # 沒有 pending 分支
+            return None
+        raise
+    ahead = int(cmp.get("ahead_by", 0) or 0)
+    if ahead <= 0 or cmp.get("status") not in ("ahead", "diverged"):
+        return None
+    commits = cmp.get("commits") or []
+    sha = commits[-1]["sha"] if commits else None
+    info = {"ahead": ahead, "sha": sha, "version": None, "notes": [], "diverged": cmp.get("status") == "diverged"}
+    try:
+        newrel = get_json(f"https://raw.githubusercontent.com/{repo}/{sha or PENDING_BRANCH}/release.json")
+        info["version"], info["notes"] = newrel.get("version"), list(newrel.get("notes", []))
+    except Exception:
+        pass
+    info["ci"] = (ci or ci_status)(repo, sha) if sha else ("none", "")
+    return info
+
+
+def receive_launcher(root=None):
+    """收更新的啟動檔（Windows：收更新.bat；Mac / Linux：收更新.command）。"""
+    root = root or TOOL_ROOT
+    return os.path.join(root, "收更新.bat" if os.name == "nt" else "收更新.command")
+
+
+def launch_receive(root=None):
+    """在新的命令列視窗執行收更新（它會問問題、開視窗測試，所以要看得到）。回傳 True / 錯誤訊息。"""
+    import sys as _sys
+    path = receive_launcher(root)
+    if not os.path.exists(path):
+        return f"找不到 {os.path.basename(path)}"
+    try:
+        if os.name == "nt":
+            os.startfile(path)                                    # 開新的命令列視窗
+        elif _sys.platform == "darwin":
+            subprocess.Popen(["open", "-a", "Terminal", path])
+        else:
+            for term in (["x-terminal-emulator", "-e"], ["gnome-terminal", "--"], ["xterm", "-e"]):
+                if shutil.which(term[0]):
+                    subprocess.Popen([*term, "bash", path])
+                    break
+            else:
+                return "找不到終端機程式，請在終端機執行：bash 收更新.command"
+        return True
+    except Exception as e:
+        return str(e)

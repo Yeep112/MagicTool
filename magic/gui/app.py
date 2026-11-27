@@ -97,6 +97,7 @@ class App:
         if check_updates:
             if self.state.get("auto_update_check", True):
                 root.after(3000, self.check_update)
+            root.after(4500, self.check_pending)
             root.after(self.UPDATE_INTERVAL_MS, self._periodic_update)
         root.after(1500, self._maybe_whats_new)
 
@@ -126,6 +127,8 @@ class App:
 
         body = tk.Frame(self.root, bg=T.BG)
         body.pack(fill="both", expand=True, padx=10, pady=(10, 4))
+        self.body = body
+        self.pend_bar = None                         # 「有新版本待發佈」提示列（開發資料夾才會出現）
         pw = Paned(body, orient="horizontal")
         pw.pack(fill="both", expand=True)
         self.paned = pw
@@ -162,6 +165,7 @@ class App:
         if p is None:
             p = Page(self, INSTRUMENTS[key], self.analyses.get(key, []))
             self.pages[key] = p
+            # （試過四頁疊在一起用 tkraise 切換：Windows 會連被蓋住的頁面一起重畫，反而慢一倍，所以不用）
             for f in p.frames():
                 f.grid(row=0, column=0, sticky="nsew")
                 f.grid_remove()
@@ -181,6 +185,7 @@ class App:
             for f in old.frames():
                 f.grid_remove()
         self.current = new
+        new.on_show()
         if self.segment.buttons[self.segment.active][0] != key:
             self.segment.select(key, notify=False)
         self.show_busy(new.busy)
@@ -405,6 +410,7 @@ class App:
             return
         if self.state.get("auto_update_check", True):
             self.check_update()
+        self.check_pending()
         self.root.after(self.UPDATE_INTERVAL_MS, self._periodic_update)
 
     def _on_update_info(self, info, manual):
@@ -450,6 +456,128 @@ class App:
             except Exception as e:
                 self.post(("update_error", str(e)))
         threading.Thread(target=work, daemon=True).start()
+
+    # ================================================================== 待發佈（開發者）
+    PENDING_RECHECK_MS = 2 * 60 * 1000              # 雲端測試還在跑時，每 2 分鐘再看一次
+
+    def check_pending(self):
+        """開發資料夾（有 .git）才檢查：GitHub 上 pending 比 main 新 → 上方顯示提示與「收更新」按鈕。"""
+        from .. import updater
+        if self.dead or not updater.is_dev_folder():
+            return
+
+        def work():
+            try:
+                info = updater.pending_info()
+            except Exception as e:
+                info = {"error": str(e)}
+            self.post(("call", lambda: self._on_pending_info(info)))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _on_pending_info(self, info):
+        if self.dead:
+            return
+        if not info or info.get("error"):
+            if not info:
+                self._hide_pending()
+            return                                   # 讀不到（沒網路）：保持原樣，下次再看
+        state, msg = info.get("ci") or ("none", "")
+        if state == "running":
+            self.root.after(self.PENDING_RECHECK_MS, self.check_pending)
+        if self.state.get("pending_dismissed") == info.get("sha"):
+            return
+        self._show_pending(info, state, msg)
+
+    def _show_pending(self, info, state, msg):
+        colors = {"success": ("#ecfdf5", "#a7f3d0", "#065f46"), "running": ("#fffbeb", "#fde68a", "#92400e"),
+                  "failure": ("#fef2f2", "#fecaca", "#991b1b")}
+        bg, edge, fg = colors.get(state, ("#eff6ff", "#bfdbfe", "#1e3a8a"))
+        if self.pend_bar is None:
+            bar = tk.Frame(self.root, highlightthickness=1)
+            self.pend_icon = tk.Label(bar, font=T.font(13))
+            self.pend_icon.pack(side="left", padx=(12, 6), pady=6)
+            txt = tk.Frame(bar)
+            txt.pack(side="left", fill="x", expand=True, pady=4)
+            self.pend_title = tk.Label(txt, font=T.font(10, "bold"), anchor="w")
+            self.pend_title.pack(fill="x")
+            self.pend_sub = tk.Label(txt, font=T.font(9), anchor="w", justify="left")
+            self.pend_sub.pack(fill="x")
+            self.pend_later = ttk.Button(bar, text="稍後", style="Neutral.Small.TButton", command=self._dismiss_pending)
+            self.pend_later.pack(side="right", padx=(4, 12))
+            self.pend_btn = ttk.Button(bar, text="📥 收更新", style="Neutral.Accent.TButton", command=self.run_receive)
+            self.pend_btn.pack(side="right", padx=4)
+            self.pend_bar = bar
+        bar = self.pend_bar
+        self._pend_sha = info.get("sha")
+        for w in (bar, self.pend_icon, self.pend_title, self.pend_sub, *bar.winfo_children()):
+            if isinstance(w, (tk.Frame, tk.Label)):
+                w.configure(bg=bg)
+        for w in (self.pend_title, self.pend_sub, self.pend_icon):
+            w.configure(fg=fg)
+        bar.configure(highlightbackground=edge, highlightcolor=edge)
+        ver = info.get("version")
+        status = {"success": "雲端測試（Windows + Mac）全部通過，可以收", "running": "雲端測試還在跑，跑完會自動更新這裡",
+                  "failure": "雲端測試沒有通過，先不要收（把訊息貼給 Claude）"}.get(state, msg or "沒有雲端測試結果")
+        self.pend_icon.configure(text={"success": "🚀", "running": "⏳", "failure": "⚠"}.get(state, "📦"))
+        self.pend_title.configure(text=f"有新版本待發佈" + (f"：v{ver}" if ver else "") + f"　（{status}）")
+        notes = info.get("notes") or []
+        sub = "；".join(n if len(n) <= 60 else n[:58] + "…" for n in notes[:3])
+        if len(notes) > 3:
+            sub += f"；…共 {len(notes)} 項"
+        self.pend_sub.configure(text=sub or f"pending 比 main 多 {info.get('ahead', 0)} 個修改",
+                                wraplength=max(self.root.winfo_width() - T.px(320), 400))
+        self.pend_btn.configure(state="disabled" if state == "failure" else "normal")
+        if not bar.winfo_ismapped():
+            bar.pack(fill="x", padx=10, pady=(8, 0), before=self.body)
+
+    def _hide_pending(self):
+        if self.pend_bar is not None and self.pend_bar.winfo_ismapped():
+            self.pend_bar.pack_forget()
+
+    def _dismiss_pending(self):
+        """稍後：這一版先不提示（有更新的待發佈版本時會再出現）。"""
+        self.state["pending_dismissed"] = getattr(self, "_pend_sha", None)
+        self.save_state_soon()
+        self._hide_pending()
+
+    def run_receive(self):
+        from .. import updater
+        if not messagebox.askyesno(
+                "收更新",
+                "會開一個命令列視窗執行「收更新」：\n\n"
+                "1. 確認雲端測試通過\n2. 套用到這個資料夾\n3. 再開一個 Magic Tool 視窗自動測試流暢度（約 1 分鐘，請不要點它）\n"
+                "4. 通過才發佈給同事\n\n任何一步沒過都不會發佈，資料夾會恢復原狀。要開始嗎？", parent=self.root):
+            return
+        r = updater.launch_receive()
+        if r is not True:
+            messagebox.showerror("收更新", f"沒辦法開啟收更新：{r}", parent=self.root)
+            return
+        self._hide_pending()
+        self.status("收更新執行中（看命令列視窗）。完成後這裡會提示重新開啟。", "info")
+        self._receive_started = time.time()
+        self.root.after(5000, self._watch_receive)
+
+    def _watch_receive(self, tries=0):
+        """等收更新結束（它會寫 receive_result.json）：成功 → 提示重新開啟；沒過 → 狀態列說明。最多等 30 分鐘。"""
+        from .. import updater
+        if self.dead:
+            return
+        r = updater.read_receive_result()
+        if r and r.get("finished", 0) >= self._receive_started:
+            new = str(r.get("version") or "")
+            if r.get("ok") and new and updater.parse_version(new) > updater.parse_version(__version__):
+                self.status(f"已發佈 v{new}", "ok")
+                if messagebox.askyesno("收更新完成", f"已經發佈 v{new}（目前開著的是 v{__version__}）。\n現在重新開啟嗎？",
+                                       parent=self.root):
+                    self.restart()
+            elif r.get("ok"):
+                self.status("收更新完成", "ok")
+            else:
+                self.status("收更新沒有完成，沒有發佈（看命令列視窗的訊息）", "warn")
+                self.root.after(1000, self.check_pending)
+            return
+        if tries < 360:
+            self.root.after(5000, lambda: self._watch_receive(tries + 1))
 
     def _maybe_whats_new(self):
         if self.dead:

@@ -81,6 +81,11 @@ def make_report(dest=None, note=""):
                 found.append(name)
         for old in sorted(logs.glob("*.log.*"))[-3:]:          # 輪替過的舊 log
             z.writestr(f"logs/{old.name}", _tail(old, 512 * 1024))
+        ph = data_dir() / "perf_history.csv"
+        if ph.is_file():                                   # 流暢度紀錄（最後 50 次）
+            rows = ph.read_text(encoding="utf-8").splitlines()
+            z.writestr("perf_history.csv", "\n".join(rows[:1] + rows[1:][-50:]) + "\n")
+            found.append("perf_history.csv（流暢度紀錄）")
         s = data_dir() / "settings.toml"
         if s.is_file():
             z.writestr("settings（遮掉金鑰）.toml", _redacted_settings(s))

@@ -107,6 +107,7 @@ class Page:
 
         # ---- 右：圖
         self.right = FigurePanel(app.right_host, key, app.view, app.on_view_change)
+        self.right.is_active = lambda: self.app.current is self    # 被蓋住的頁面：視窗大小改變時先不重新排版
         tools = self.right.tools
         tools.get_ov = lambda: self.st.setdefault("fig", {}).setdefault(self.current.name if self.current else "", {})
         tools.save = self.app.save_state_soon
@@ -469,6 +470,10 @@ class Page:
     def restyle(self):
         self.right.sync_view()
         self.right.restyle()
+
+    def on_show(self):
+        """切換到這頁時：被蓋住期間累積的排版（例如視窗改過大小）現在補做。"""
+        self.right.on_show()
 
     # ================================================================== 存檔
     def _out_dir(self):
