@@ -1078,6 +1078,48 @@ def _gui_03(app, root, pump, ep):
         ed.clear("anchors")
         ed.clear("erase")
         assert app.raman_edits.count(ed.path) == (0, 0)
+        # ---- 橡皮擦（點 / 塗抹）：左鍵點一下、按住拖曳一筆、右鍵恢復；框選模式只點一下
+        from .raman import edits as _E
+        ed.set_mode("brush")
+        assert ed.mode_var.get() == "brush"
+        root.update()
+        ed.canvas.draw()
+
+        def mev(j, button=1):
+            e = _Ev(*ed.ax1.transData.transform((ed.x[j], ed.y[j])), button)
+            e.inaxes, e.xdata, e.ydata = ed.ax1, ed.x[j], ed.y[j]
+            return e
+
+        def erased(j):
+            return bool(_E.erased_mask(ed.x, ed.ed.get("erase"))[j])
+
+        nx = len(ed.x)
+        j = nx // 3
+        u0 = len(ed.undo_stack)
+        ed._press(mev(j))
+        ed._release(mev(j))
+        n1 = app.raman_edits.count(ed.path)[0]
+        assert erased(j) and n1 >= 1 and len(ed.undo_stack) == u0 + 1, "筆刷：左鍵點一下沒有擦掉滑鼠附近的點"
+        a0, a1 = j + nx // 10, j + nx // 10 + 40
+        ed._press(mev(a0))
+        for k in range(a0, a1, 5):
+            ed._motion(mev(k))
+        ed._release(mev(a1))
+        n2 = app.raman_edits.count(ed.path)[0]
+        assert n2 >= n1 + 20 and erased(a0) and erased(a1), f"筆刷：拖曳一筆應該沿路擦掉（{n1} → {n2}）"
+        assert len(ed.undo_stack) == u0 + 2, "拖曳一整筆要記成一步"
+        ed.undo()
+        assert app.raman_edits.count(ed.path)[0] == n1 and not erased(a0), "復原應該一次復原整筆"
+        ed._press(mev(j, 3))
+        ed._release(mev(j, 3))
+        assert not erased(j) and app.raman_edits.count(ed.path)[0] < n1, "筆刷：右鍵應該恢復滑鼠附近的點"
+        ed.set_mode("erase")
+        jj = 2 * nx // 3
+        ed._press(mev(jj))
+        ed._release(mev(jj))
+        assert erased(jj), "框選模式：只點一下也要擦掉滑鼠附近的點"
+        ed.clear("erase")
+        assert app.raman_edits.count(ed.path) == (0, 0)
         ed.close()
         # ---- 峰標註
         pg.features.select("石墨烯 G / 2D 峰")

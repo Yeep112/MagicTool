@@ -6,8 +6,9 @@
   下圖：扣掉手動背景後的光譜（還沒有錨點時顯示原始光譜）
 
 滑鼠：
-  ⌫ 橡皮擦：拖曳畫框 → 框裡的點被擦掉（上下兩張圖都可以框）
-  ↺ 還原筆：拖曳畫框 → 框裡被擦掉的點恢復
+  ⌫ 橡皮擦（點 / 塗抹）：左鍵點一下 = 擦掉滑鼠附近的點；按住左鍵拖曳 = 沿路擦掉；右鍵 = 恢復（筆刷大小可以調）
+  ⬚ 橡皮擦（框選）：拖曳畫框 → 框裡的點被擦掉（上下兩張圖都可以框）；只點一下也會擦掉滑鼠附近的點
+  ↺ 還原筆：拖曳畫框 → 框裡被擦掉的點恢復；只點一下 = 恢復滑鼠附近的點
   ✚ 背景錨點：左鍵點一下新增、拖曳移動；右鍵刪除最近的錨點
   🔍 縮放 / 平移：用工具列（這時滑鼠不會改到資料）
 """
@@ -29,12 +30,13 @@ from ..readers.raman_txt import xy
 from . import theme as T
 from .widgets import Paned
 
-MODES = [("view", "🔍 縮放 / 平移"), ("erase", "⌫ 橡皮擦（框選）"), ("restore", "↺ 還原筆（框選）"),
-         ("anchor", "✚ 背景錨點")]
+MODES = [("view", "🔍 縮放 / 平移"), ("brush", "⌫ 橡皮擦（點 / 塗抹）"), ("erase", "⬚ 橡皮擦（框選）"),
+         ("restore", "↺ 還原筆（框選）"), ("anchor", "✚ 背景錨點")]
 HINTS = {
     "view": "用下面的工具列放大（放大鏡）或平移（十字），看清楚要擦的雜訊；Home 回到全部範圍",
-    "erase": "拖曳畫一個框：框裡的點會被擦掉（只影響顯示與分析，原始檔不變）。Ctrl+Z 復原",
-    "restore": "拖曳畫一個框：框裡被擦掉的點會恢復",
+    "brush": "左鍵點一下：擦掉滑鼠附近的點；按住左鍵拖曳：沿路擦掉；右鍵（點或拖曳）：恢復。一筆 = 一步，Ctrl+Z 復原",
+    "erase": "拖曳畫一個框：框裡的點會被擦掉；只點一下 = 擦掉滑鼠附近的點（只影響顯示與分析，原始檔不變）。Ctrl+Z 復原",
+    "restore": "拖曳畫一個框：框裡被擦掉的點會恢復；只點一下 = 恢復滑鼠附近的點",
     "anchor": "左鍵點背景的位置新增錨點（勾「貼齊光譜」會自動對到那裡的光譜高度）；拖曳移動；右鍵刪除",
 }
 
@@ -61,6 +63,8 @@ class RamanEditor(tk.Toplevel):
         self.x = self.y = None
         self.ed = E.empty()
         self.drag = None
+        self.stroke = None                    # 筆刷正在畫的那一筆（放開滑鼠才算一步）
+        self._click = None                    # 框選模式：按下的位置（沒有拖曳 = 點一下）
         self.changed = False
         a = T.accent(self.key)
         head = tk.Frame(self, bg=a["main"], padx=16, pady=8)
@@ -85,12 +89,13 @@ class RamanEditor(tk.Toplevel):
         self._build_list(left)
         self._build_tools(right)
         self._build_figure(right)
-        self.set_mode("erase")
+        self.set_mode("brush")
         self.protocol("WM_DELETE_WINDOW", self.close)
         for seq, fn in (("<Control-z>", self.undo), ("<Control-Z>", self.undo), ("<Control-y>", self.redo),
                         ("<Control-Y>", self.redo), ("<Command-z>", self.undo), ("<Command-Z>", self.redo),
                         ("<Command-y>", self.redo), ("<Escape>", lambda: self.set_mode("view")),
-                        ("e", lambda: self.set_mode("erase")), ("a", lambda: self.set_mode("anchor")),
+                        ("e", lambda: self.set_mode("brush")), ("b", lambda: self.set_mode("erase")),
+                        ("a", lambda: self.set_mode("anchor")),
                         ("r", lambda: self.set_mode("restore"))):
             self.bind(seq, lambda ev, f=fn: f())
         start = start if start in self.paths else (self.paths[0] if self.paths else None)
@@ -135,7 +140,7 @@ class RamanEditor(tk.Toplevel):
         r1.pack(fill="x", pady=(4, 2))
         r2 = tk.Frame(bar, bg=T.SUBTLE)
         r2.pack(fill="x", pady=(2, 4))
-        self.mode_var = tk.StringVar(value="erase")
+        self.mode_var = tk.StringVar(value="brush")
         tk.Label(r1, text="工具", bg=T.SUBTLE, fg=T.MUTED, font=T.font(9, "bold")).pack(side="left", padx=(8, 6))
         for k, text in MODES:
             ttk.Radiobutton(r1, text=text, value=k, variable=self.mode_var, style=f"{self.key}.TRadiobutton",
@@ -144,6 +149,10 @@ class RamanEditor(tk.Toplevel):
         self.redo_btn = ttk.Button(r1, text="↷ 重做", style=f"{self.key}.Small.TButton", command=self.redo)
         self.redo_btn.pack(side="right", padx=(2, 8))
         self.undo_btn.pack(side="right", padx=2)
+        self.brush_var = tk.StringVar(value="10")
+        tk.Label(r1, text="px", bg=T.SUBTLE, fg=T.MUTED, font=T.font(9)).pack(side="right", padx=(2, 10))
+        ttk.Spinbox(r1, from_=2, to=60, increment=2, textvariable=self.brush_var, width=3).pack(side="right")
+        tk.Label(r1, text="筆刷大小", bg=T.SUBTLE, fg=T.MUTED, font=T.font(9)).pack(side="right", padx=(10, 2))
         tk.Label(r2, text="背景", bg=T.SUBTLE, fg=T.MUTED, font=T.font(9, "bold")).pack(side="left", padx=(8, 6))
         tk.Label(r2, text="錨點之間", bg=T.SUBTLE, fg=T.MUTED, font=T.font(9)).pack(side="left")
         self.interp_var = tk.StringVar(value=E.INTERPS[0])
@@ -201,7 +210,7 @@ class RamanEditor(tk.Toplevel):
             except Exception:
                 pass
         self.hint.configure(text=HINTS[mode])
-        cursor = {"erase": "crosshair", "restore": "crosshair", "anchor": "tcross"}.get(mode, "")
+        cursor = {"brush": "circle", "erase": "crosshair", "restore": "crosshair", "anchor": "tcross"}.get(mode, "")
         try:
             self.canvas.get_tk_widget().configure(cursor=cursor)
         except tk.TclError:
@@ -299,6 +308,10 @@ class RamanEditor(tk.Toplevel):
         lo, hi = sorted((x0, x1))
         blo, bhi = sorted((y0, y1))
         inside = (self.x >= lo) & (self.x <= hi) & (values >= blo) & (values <= bhi)
+        return self.apply_hits(inside, restore)
+
+    def apply_hits(self, inside, restore=False, commit=True):
+        """inside = 要擦掉（或恢復）的點。commit=False：只改目前顯示（筆刷拖曳中），放開滑鼠才記成一步。"""
         erased = E.erased_mask(self.x, self.ed.get("erase"))
         new = copy.deepcopy(self.ed)
         if restore:
@@ -307,6 +320,9 @@ class RamanEditor(tk.Toplevel):
                 return 0
             keep = set(np.round(self.x[hit], E.ND).tolist())
             new["erase"] = [v for v in new["erase"] if round(v, E.ND) not in keep]
+            if not commit:
+                self.ed = new
+                return int(hit.sum())
             self._commit(new, f"恢復 {int(hit.sum())} 個點（Ctrl+Z 可以復原）")
         else:
             hit = inside & ~erased
@@ -316,8 +332,40 @@ class RamanEditor(tk.Toplevel):
                 self.hint.configure(text="至少要留 5 個點", fg=T.WARNING)
                 return 0
             new["erase"] = sorted(set(new["erase"]) | set(np.round(self.x[hit], E.ND).tolist()))
+            if not commit:
+                self.ed = new
+                return int(hit.sum())
             self._commit(new, f"擦掉 {int(hit.sum())} 個點（只影響顯示與分析；Ctrl+Z 可以復原）")
         return int(hit.sum())
+
+    # ---- 筆刷：滑鼠附近（半徑 = 筆刷大小，螢幕像素）的點
+    def brush_px(self):
+        try:
+            return max(2.0, min(60.0, float(self.brush_var.get())))
+        except (ValueError, AttributeError):
+            return 10.0
+
+    def near_mask(self, ax, px, py, r=None):
+        """這張圖上，離螢幕位置 (px, py) 在 r 像素以內的點（上圖用原始值、下圖用扣背景後的值）。"""
+        r = self.brush_px() if r is None else r
+        values = self.y if ax is self.ax1 else self.y - self._bg_full()
+        pts = ax.transData.transform(np.column_stack([self.x, values]))
+        return np.hypot(pts[:, 0] - px, pts[:, 1] - py) <= r
+
+    def _brush_at(self, event):
+        st = self.stroke
+        mask = self.near_mask(st["ax"], event.x, event.y)
+        if st.get("last") is not None:                      # 滑鼠移動很快時，兩點之間也要擦到
+            x0, y0 = st["last"]
+            steps = int(np.hypot(event.x - x0, event.y - y0) // max(self.brush_px() * 0.7, 1))
+            for k in range(1, steps + 1):
+                f = k / (steps + 1)
+                mask |= self.near_mask(st["ax"], x0 + (event.x - x0) * f, y0 + (event.y - y0) * f)
+        st["last"] = (event.x, event.y)
+        n = self.apply_hits(mask, st["restore"], commit=False)
+        if n:
+            st["n"] += n
+            self.redraw(light=True)
 
     def _snap(self, xv, yv):
         if not self.snap_var.get():
@@ -372,7 +420,20 @@ class RamanEditor(tk.Toplevel):
         return i if d[i] <= px else None
 
     def _press(self, event):
-        if self.mode_var.get() != "anchor" or str(getattr(self.toolbar, "mode", "")) or self.path is None:
+        mode = self.mode_var.get()
+        if str(getattr(self.toolbar, "mode", "")) or self.path is None:
+            return
+        if mode == "brush":
+            if event.inaxes in (self.ax1, self.ax2) and event.button in (1, 3):
+                self.stroke = dict(ax=event.inaxes, restore=(event.button == 3), before=copy.deepcopy(self.ed),
+                                   n=0, last=None)
+                self._brush_at(event)
+            return
+        if mode in ("erase", "restore"):
+            if event.inaxes in (self.ax1, self.ax2) and event.button == 1:
+                self._click = (event.x, event.y, event.inaxes)
+            return
+        if mode != "anchor":
             return
         if event.inaxes is not self.ax1 or event.xdata is None:
             return
@@ -389,6 +450,10 @@ class RamanEditor(tk.Toplevel):
             self.add_anchor(event.xdata, event.ydata)
 
     def _motion(self, event):
+        if self.stroke is not None:
+            if event.inaxes is self.stroke["ax"] and event.x is not None:
+                self._brush_at(event)
+            return
         d = self.drag
         if d is None or event.inaxes is not self.ax1 or event.xdata is None:
             return
@@ -397,6 +462,23 @@ class RamanEditor(tk.Toplevel):
         self.redraw(light=True)
 
     def _release(self, event):
+        if self.stroke is not None:
+            st, self.stroke = self.stroke, None
+            if st["n"]:
+                done = self.ed
+                self.ed = st["before"]                      # 整筆記成一步（Ctrl+Z 一次復原整筆）
+                what = "恢復" if st["restore"] else "擦掉"
+                self._commit(done, f"{what} {st['n']} 個點（一筆；Ctrl+Z 可以復原）")
+            return
+        if self._click is not None:
+            x0, y0, ax = self._click
+            self._click = None
+            if event.x is not None and abs(event.x - x0) < 2 and abs(event.y - y0) < 2:   # 沒有拖曳 = 點一下（框選至少 2 px）
+                restore = self.mode_var.get() == "restore"
+                if not self.apply_hits(self.near_mask(ax, x0, y0), restore):
+                    self.hint.configure(text="滑鼠附近沒有可以" + ("恢復" if restore else "擦掉") +
+                                        "的點（可以調大「筆刷大小」）", fg=T.MUTED)
+            return
         d, self.drag = self.drag, None
         if d is None or not d["moved"]:
             return
