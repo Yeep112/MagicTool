@@ -267,3 +267,99 @@ def afm_profile(path, h=37.5, kind="gwyddion", n_profiles=2, trench=False, tilt=
             for i in range(len(x)):
                 f.write(f"{x[i] / 1000:.5f}\t{z[i]:.4f}\n")
     return path
+
+
+# ---------------------------------------------------------------------------
+# 樣品製程（製程頁）：合成的樣品資料夾 + 試算表（格式和實驗室的 Sample Tracking 一樣，內容是虛構的）
+# ---------------------------------------------------------------------------
+def _png(path, rgb=(120, 110, 220), w=48, h=36):
+    """寫一張單色小 PNG（不需要 PIL）。"""
+    import struct
+    import zlib
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    raw = b"".join(b"\x00" + bytes(rgb) * w for _ in range(h))
+
+    def chunk(tag, data):
+        return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+    data = (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+    with open(path, "wb") as f:
+        f.write(data)
+    return path
+
+
+SAMPLE_SHEET = [
+    ["Status", "Label", "Type", "Start Time", "Process"] + [""] * 17 + ["備註"],
+    # 901：完整兩次 contact（跟資料夾 03 / 05+06 / 07+08 對得上；資料夾 15+17 試算表沒有 → 待確認）
+    ["R_1500 (SC)", "901", "Tri-TaS2", "20250330", "transfer", "marker", "Cr/Au_10/50 (E)", "contact",
+     "plasma 40W 30sccm 30s", "RIE_20s OE_3nm", "Cr/Au_10/70 (E)", "contact", "plasma 40W 30sccm 30s",
+     "RIE_20s OE_3nm", "Ion miling 18mA 30height_30s", "NbTi_70nm (S)"] + [""] * 6 + ["範例"],
+    # 902：擱置，有預定日期
+    ["Raith(4/28）擱置", "902", "Tri-NbSe2", "20260311", "transfer", "raman", "marker", "AFM"],
+    # 903：放棄（沒有資料夾）
+    ["-", "903", "Quad-NbSe2", "20250104", "transfer", "-"],
+    # 904：鍍完膜後又出現 plasma（推測少寫一個 contact）
+    ["measured", "904", "Tri-TaS2", "20250627", "transfer", "marker", "Cr/Au_10/40 (E)", "contact",
+     "plasma 40W 30sccm 30s", "RIE_20s OE_8nm", "Raman", "contact", "plasma 40W 30sccm 30s", "RIE_18s OE_2.8nm",
+     "Cr/Au_10/60 (E)", "plasma 40W 30sccm 30s", "RIE_18s OE_2.8nm", "Ion miling 18mA 30height_60s",
+     "NbTi_70nm (S)"],
+    # 905：鍍膜前面沒有 marker / contact
+    ["-", "905", "Tri-NbSe2", "20260204", "transfer", "raman", "Cr/Au_10/50 (E)", "-"],
+    # al 906：N/A、hBN 厚度和 RIE 寫在同一格、Al
+    ["measured ", "al 906", "hBN-Al", "20260630", "transfer", "N/A", "marker", "AFM", "contact",
+     "plasma 40W 30sccm 30s ", "hBN_40.17 RIE_17s OE_4.03nm", "Cr/Au_10/60 (E)", "contact",
+     "plasma 40W 30sccm 30s", "RIE_17s OE_4.03nm", "Ion miling 18mA 30height_120s", "Al_70nm"],
+    # 907：沒有空格、多餘空白、top gate
+    ["R_900 (SC on TaS2)", "907", "Tri-TaS2", "20260311", "transfer ", "raman ", "marker", "AFM", "contact ",
+     "plasma 40W 30sccm 30s", "hBN_38.89RIE_16s OE_2.71nm", "Cr/Au_10/60 (E)", "top gate", "Cr/Au_10/140 (E)"],
+    # 908：看不懂的文字
+    ["", "908", "Tri-TaS2", "20260415", "transfer", "XYZ step"],
+]
+
+SAMPLE_901_FOLDERS = [   # (資料夾, 照片檔名)
+    ("00 Design", []), ("01 Transfer", ["11-0001.png", "11-0002.png"]),
+    ("02 After Cleaning", ["20250331_163826.png"]), ("03 Lift Off", ["20250410_140104.png", "20250410_140248.png"]),
+    ("04 AFM", ["901_250411_ZHeight_002.png", "hBN_48.5, Ta_14.8.png"]),
+    ("05 Lithography", ["20250412_213849.png", "20250412_214932.png"]), ("06 Lift Off", ["20250415_161221.png"]),
+    ("07 Lithography", ["20250415_204810.png"]), ("08 Lift Off", []),
+    ("11 After measurement", ["20250529_114131.png"]), ("13 Transfer", ["0731-0001.png", "0731-0002.png"]),
+    ("14 Cover hBN", ["20250915_173358.png"]), ("15 Lithography", ["20251001_114325.png"]),
+    ("16 AFM", ["901_251001_ZHeight_001.png", "57.8.png"]), ("17 Lift Off", ["20251002_153904.png"]),
+    ("18 Bonding", ["20251012_161025.png"]), ("19 Measurement", []), ("20 Data Analysis", []),
+]
+
+
+def write_samples(folder):
+    """在 folder 底下產生 00 Samples\\09 Demo project\\<樣品>\\NN 步驟\\… 與試算表 sample_tracking.csv。
+    回傳 {"root", "sheet", "901", …}。"""
+    import csv
+    j = os.path.join
+    root = j(folder, "00 Samples")
+    proj = j(root, "09 Demo project")
+    out = {"root": root}
+    s901 = j(proj, "901")
+    for name, imgs in SAMPLE_901_FOLDERS:
+        os.makedirs(j(s901, name), exist_ok=True)
+        for k, img in enumerate(imgs):
+            _png(j(s901, name, img), (100 + 20 * k, 90, 200))
+    os.makedirs(j(s901, "00 Design", "digitalize"), exist_ok=True)
+    _write(j(s901, "00 Design", "digitalize", "graphene.csv"), "x,Curve1\n0,0\n10,0\n10,8\n0,8\n")
+    with open(j(s901, "19 Measurement", "Demo 901_2025-10-13_01.db"), "wb") as f:
+        f.write(b"SQLite format 3\x00")
+    raman(j(s901, "19 Measurement", "synthetic_901_raman.txt"), "monolayer")
+    out["901"] = s901
+    for lab, dirs in (("902", ["01 Transfer", "02 Raman", "03 Marker"]),
+                      ("904", ["01 Transfer", "02 Lift Off", "03 Lithography", "04 Lift Off"]),
+                      ("al 906", ["01 Transfer", "02 Lift Off", "03 AFM", "04 Lithography", "05 Lift Off"]),
+                      ("907", ["01 Transfer", "02 Raman", "03 Lift Off", "04 AFM"]),
+                      ("909", ["01 Transfer", "02 AFM", "03 Lithography", "04 Lift Off"])):  # 909 只有資料夾
+        for d in dirs:
+            _png(j(proj, lab, d, f"2026031{len(d) % 9}_120000.png"))
+        out[lab] = j(proj, lab)
+    os.makedirs(j(proj, "not a sample", "random"), exist_ok=True)       # 不是樣品的資料夾
+    sheet = j(folder, "sample_tracking.csv")
+    os.makedirs(folder, exist_ok=True)
+    with open(sheet, "w", encoding="utf-8", newline="") as f:
+        csv.writer(f).writerows(SAMPLE_SHEET)
+    out["sheet"] = sheet
+    return out

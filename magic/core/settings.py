@@ -37,6 +37,15 @@ DEFAULTS = {
         "gsheet_worksheet": "",      # 工作表名稱；空白 = 第一張
         "service_account": "",       # 金鑰路徑；空白 = secrets\service_account.json
     },
+    # 製程 → 樣品頁
+    "samples": {
+        "user": "",                  # 使用者名稱（每個人的樣品分開記）
+        "root": "",                  # 樣品根目錄，例如 …\SynologyDrive\00 Users\01 Yeep\00 Samples
+        "record_name": "{folder}.json",   # 每個樣品資料夾裡的紀錄檔名稱；{folder} = 樣品資料夾名稱
+        "folder_rule": "",           # 步驟資料夾的命名規則（正規表示式）；空白 = 「NN 名稱」
+        "sheet": "",                 # 試算表網址或 .xlsx / .csv 檔
+        "service_account": "",       # 空白 = 和蝕刻紀錄共用
+    },
 }
 
 

@@ -47,7 +47,7 @@ def main():
             time.sleep(0.005)
         return False
 
-    pump(lambda: len(app.pages) == len(INSTRUMENTS), 15)
+    pump(lambda: all(k in app.pages for k in [*INSTRUMENTS, "Samples"]), 15)
     app.open_demo()
     pump(lambda: all(p.data.files for p in app.pages.values() if p.inst.source == "files"), 15)
     pump(lambda: app.pages["Etching"].data.df is not None, 10)
