@@ -22,6 +22,23 @@ import traceback
 TOL = {"Tc": 0.03, "peak": 1.0, "fwhm": 1.5, "Hc": 6.0}
 
 
+def perf_factor():
+    """流暢度門檻的倍數。只有 GitHub 的雲端測試機（共用的虛擬機，時間抖動大）會設 MAGIC_PERF_FACTOR；
+    你電腦上的 publish / 收更新 一律用原本的門檻（1 倍）。"""
+    try:
+        return max(1.0, float(os.environ.get("MAGIC_PERF_FACTOR", "1")))
+    except ValueError:
+        return 1.0
+
+
+def _has_tk(python):
+    import subprocess
+    try:
+        return subprocess.run([python, "-c", "import tkinter"], capture_output=True, timeout=60).returncode == 0
+    except Exception:
+        return False
+
+
 class Report:
     def __init__(self, log):
         self.log = log
@@ -480,12 +497,13 @@ def check_mac_support(tmp):
     from .install import make_mac_app, mac_launcher_script
     from .updater import make_executable
     out = []
-    for name in ("run_magic.command", "install.command", "publish.command", "magic_env.sh"):
+    names = ("run_magic.command", "install.command", "publish.command", "收更新.command", "magic_env.sh")
+    for name in names:
         fp = os.path.join(TOOL_ROOT, name)
         data = open(fp, "rb").read()
         assert data.startswith(b"#!/bin/bash"), f"{name} 第一行要是 #!/bin/bash"
         assert b"\r" not in data, f"{name} 不能有 Windows 換行（Mac 會無法執行）"
-    out.append("啟動檔 4 個")
+    out.append(f"啟動檔 {len(names)} 個")
     app = make_mac_app(os.path.join(tmp, "Applications", "Magic Tool.app"), python=sys.executable)
     with open(os.path.join(app, "Contents", "Info.plist"), "rb") as f:
         info = plistlib.load(f)
@@ -497,34 +515,39 @@ def check_mac_support(tmp):
     if os.name != "nt" and bash:
         assert os.stat(exe).st_mode & 0o111, "app 的啟動腳本要可以執行"
         for code in (open(exe, encoding="utf-8").read(), script):
-            r = subprocess.run([bash, "-n"], input=code, text=True, capture_output=True)
+            r = subprocess.run([bash, "-n"], input=code, text=True, encoding="utf-8", capture_output=True)
             assert r.returncode == 0, r.stderr
         # 啟動檔沒有執行權限時（例如從 zip 解壓縮）→ 更新後補上
         d = os.path.join(tmp, "exec_test")
         os.makedirs(d, exist_ok=True)
         fp = os.path.join(d, "a.command")
-        open(fp, "w").write("#!/bin/bash\n")
+        open(fp, "w", encoding="utf-8").write("#!/bin/bash\n")
         os.chmod(fp, 0o644)
         assert make_executable(d) == ["a.command"] and os.stat(fp).st_mode & 0o100
         # 找 Python 的腳本：用目前這個 Python 的資料夾當 PATH，要找得到
-        env = dict(os.environ, MAGIC_DATA=os.path.join(tmp, "envtest"),
-                   PATH=os.path.dirname(sys.executable) + os.pathsep + "/usr/bin:/bin")
-        env.pop("CONDA_PREFIX", None)
-        r = subprocess.run([bash, "-c", 'source "$1" && echo "PY=$PYEXE"', "_", os.path.join(TOOL_ROOT, "magic_env.sh")],
-                           env=env, capture_output=True, text=True, timeout=120, input="n\n")
-        assert r.returncode == 0 and "PY=" in r.stdout and r.stdout.strip() != "PY=", r.stdout + r.stderr
-        out.append("找 Python 的腳本、app 腳本語法")
+        # （magic_env.sh 只接受有 tkinter 的 Python；這台的 Python 沒有 tkinter 時，這一小項略過）
+        if _has_tk(sys.executable):
+            env = dict(os.environ, MAGIC_DATA=os.path.join(tmp, "envtest"),
+                       PATH=os.path.dirname(sys.executable) + os.pathsep + "/usr/bin:/bin")
+            env.pop("CONDA_PREFIX", None)
+            r = subprocess.run([bash, "-c", 'source "$1" && echo "PY=$PYEXE"', "_",
+                                os.path.join(TOOL_ROOT, "magic_env.sh")],
+                               env=env, capture_output=True, text=True, encoding="utf-8", timeout=120, input="n\n")
+            assert r.returncode == 0 and "PY=" in r.stdout and r.stdout.strip() != "PY=", r.stdout + r.stderr
+            out.append("找 Python 的腳本、app 腳本語法")
+        else:
+            out.append("app 腳本語法（這台的 Python 沒有 tkinter，略過找 Python 的腳本）")
         # App 殼：pythonw 一開就失敗 → 改用 python 再試；還是失敗 → 跳出說明（這台沒有 osascript 時印出 ALERT）
         fake = os.path.join(tmp, "fakepy")
         os.makedirs(fake, exist_ok=True)
         for name in ("pythonw", "python"):
             fp = os.path.join(fake, name)
-            with open(fp, "w", newline="\n") as f:
+            with open(fp, "w", newline="\n", encoding="utf-8") as f:
                 f.write(f"#!/bin/bash\necho 'Traceback: {name} 測試失敗' >&2\nexit 1\n")
             os.chmod(fp, 0o755)
         home = os.path.join(tmp, "machome")
         app2 = make_mac_app(os.path.join(home, "Applications", "T.app"), python=os.path.join(fake, "python"))
-        r = subprocess.run([os.path.join(app2, "Contents", "MacOS", "MagicTool")], capture_output=True, text=True,
+        r = subprocess.run([os.path.join(app2, "Contents", "MacOS", "MagicTool")], capture_output=True, text=True, encoding="utf-8", errors="replace",
                            timeout=60, env={"HOME": home, "PATH": "/usr/bin:/bin"})
         log = open(os.path.join(home, "Library", "Application Support", "MagicTool", "logs", "app_launch.log"),
                    encoding="utf-8").read()
@@ -553,7 +576,7 @@ def check_mac_support(tmp):
         dst = copy_program(TOOL_ROOT, os.path.join(tmp, "program"))          # 再裝一次：覆蓋舊的
         assert not os.path.exists(dst + ".old") and not os.path.exists(dst + ".new")
         r = subprocess.run([sys.executable, "-c", "import magic, sys; print(magic.__file__)"], cwd=tmp,
-                           env=dict(os.environ, PYTHONPATH=dst), capture_output=True, text=True, timeout=60)
+                           env=dict(os.environ, PYTHONPATH=dst), capture_output=True, text=True, encoding="utf-8", timeout=60)
         assert r.returncode == 0 and r.stdout.strip().startswith(dst), r.stdout + r.stderr
         out.append("文件資料夾 → 複製程式")
     out.append("Magic Tool.app")
@@ -685,20 +708,20 @@ def check_update(tmp):
                 z.write(fp, os.path.join("MagicTool-main", os.path.relpath(fp, src)))
     old = os.path.join(tmp, "installed")
     os.makedirs(os.path.join(old, "magic"))
-    with open(os.path.join(old, "magic", "__main__.py"), "w") as f:
+    with open(os.path.join(old, "magic", "__main__.py"), "w", encoding="utf-8") as f:
         f.write("# old\n")
-    with open(os.path.join(old, "magic", "obsolete.py"), "w") as f:
+    with open(os.path.join(old, "magic", "obsolete.py"), "w", encoding="utf-8") as f:
         f.write("# should disappear\n")
     with open(os.path.join(old, "release.json"), "w", encoding="utf-8") as f:
         json.dump({"version": "0.0.1", "repo": "Yeep112/MagicTool", "branch": "main"}, f)
-    with open(os.path.join(old, "settings.toml"), "w") as f:
+    with open(os.path.join(old, "settings.toml"), "w", encoding="utf-8") as f:
         f.write("keep = true\n")
     ver = updater.apply_update({"commit": None}, log=lambda m: None, zip_source=zpath, root=old)
     assert ver == updater.read_release(os.path.join(src, "release.json"))["version"], ver
     assert os.path.exists(os.path.join(old, "magic", "registry.py")) is False
     assert os.path.exists(os.path.join(old, "magic", "core", "registry.py")), "新程式沒有裝進去"
     assert not os.path.exists(os.path.join(old, "magic", "obsolete.py")), "舊模組應該被移除"
-    assert open(os.path.join(old, "settings.toml")).read() == "keep = true\n", "使用者檔案被覆蓋了"
+    assert open(os.path.join(old, "settings.toml"), encoding="utf-8").read() == "keep = true\n", "使用者檔案被覆蓋了"
     assert updater.list_backups(old), "沒有備份"
     return f"0.0.1 → {ver}，備份與使用者檔案正常"
 
@@ -893,14 +916,19 @@ def run_gui(rep, timeout=90):
     worst_draw = max(t[3] for t in stats["timings"]) if stats["timings"] else 0
     max_gap = stats["bg_gaps"][-1] if stats["bg_gaps"] else 0
 
+    k = perf_factor()
+    lim_sw, lim_bg, lim_anim = 150 * k, 600 * k, 100 * k
+
     def perf():
         rep.log(f"    切換時間（ms）：{', '.join(f'{v:.0f}' for v in stats['switch_ms'])}")
-        if sw[-1] > 150:
-            raise AssertionError(f"切換機台最慢 {sw[-1]:.0f} ms（> 150 ms）")
-        if max_gap > 0.6:
-            raise AssertionError(f"背景計算時畫面最多卡住 {max_gap * 1000:.0f} ms（> 600 ms）")
-        if stats.get("anim_gap", 0) > 0.1:
-            raise AssertionError(f"蝕刻動畫最多卡住 {stats['anim_gap'] * 1000:.0f} ms（> 100 ms）")
+        if k != 1:
+            rep.log(f"    （雲端測試機：門檻放寬 {k:g} 倍；真正的流暢度門檻在你電腦上的 publish / 收更新 檢查）")
+        if sw[-1] > lim_sw:
+            raise AssertionError(f"切換機台最慢 {sw[-1]:.0f} ms（> {lim_sw:.0f} ms）")
+        if max_gap * 1000 > lim_bg:
+            raise AssertionError(f"背景計算時畫面最多卡住 {max_gap * 1000:.0f} ms（> {lim_bg:.0f} ms）")
+        if stats.get("anim_gap", 0) * 1000 > lim_anim:
+            raise AssertionError(f"蝕刻動畫最多卡住 {stats['anim_gap'] * 1000:.0f} ms（> {lim_anim:.0f} ms）")
         if not stats["fixed_ok"]:
             raise AssertionError("固定大小時圖被壓縮或沒有出現捲軸")
         return (f"切換機台 中位數 {sw[len(sw) // 2]:.1f} ms、最慢 {sw[-1]:.1f} ms；"

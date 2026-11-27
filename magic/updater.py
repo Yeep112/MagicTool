@@ -403,6 +403,7 @@ def run_selftest(root, log=print, python=None):
     發佈前一定要實際開視窗跑過：每個功能畫一次、量切換機台 / 背景計算 / 動畫的流暢度，沒通過就不上傳。回傳 True/False。"""
     import sys as _sys
     env = dict(os.environ, PYTHONUTF8="1", PYTHONIOENCODING="utf-8", MPLBACKEND="Agg")
+    env.pop("MAGIC_PERF_FACTOR", None)              # 你電腦上一律用原本的流暢度門檻（不放寬）
     proc = subprocess.Popen([python or _sys.executable, "-m", "magic", "selftest", "--release"], cwd=root, env=env,
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8",
                             errors="replace")
@@ -535,3 +536,144 @@ def publish(log=print, ask=input, root=None, test=True):
     log(f"\n✓ 已發佈 v{rel['version']} 到 GitHub（{rel.get('repo')}）。")
     log("  同事開啟軟體時、或執行中每 30 分鐘會檢查到；GitHub 快取約 5 分鐘，最慢幾分鐘內就會跳出更新提示。")
     return True
+
+
+# ---------------------------------------------------------------------------
+# 收更新（開發者）：Claude 把測試過的更新推到 pending 分支 → 你按「收更新.bat」→ 自動發佈
+# ---------------------------------------------------------------------------
+PENDING_BRANCH = "pending"
+
+
+def actions_url(repo):
+    return f"https://github.com/{repo}/actions"
+
+
+def ci_status(repo, sha, timeout=10):
+    """GitHub Actions 雲端測試（真的 Windows / Mac）對這個 commit 的結果。
+    回傳 (狀態, 說明)；狀態：success / running / failure / none（沒有測試紀錄）/ error（讀不到）。"""
+    try:
+        req = urllib.request.Request(
+            f"https://api.github.com/repos/{repo}/commits/{sha}/check-runs?per_page=100",
+            headers={"User-Agent": "MagicTool-updater", "Accept": "application/vnd.github+json"})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            runs = json.loads(r.read().decode("utf-8")).get("check_runs", [])
+    except Exception as e:
+        return "error", f"讀不到雲端測試結果（{e}）"
+    if not runs:
+        return "none", "這個版本沒有雲端測試紀錄"
+    names = lambda rs: "、".join(sorted({x.get("name", "?") for x in rs}))
+    waiting = [x for x in runs if x.get("status") != "completed"]
+    if waiting:
+        return "running", f"還在跑：{names(waiting)}"
+    bad = [x for x in runs if x.get("conclusion") not in ("success", "skipped", "neutral")]
+    if bad:
+        return "failure", f"沒有通過：{names(bad)}"
+    return "success", f"全部通過：{names(runs)}"
+
+
+def _publish_subprocess(root, log=print, ask=None, test=True):
+    """用資料夾裡的「新」程式執行 publish（收更新後程式已經換新，不能用記憶體裡的舊版）。"""
+    import sys as _sys
+    env = dict(os.environ, PYTHONUTF8="1", PYTHONIOENCODING="utf-8")
+    env.pop("MAGIC_PERF_FACTOR", None)
+    return subprocess.call([_sys.executable, "-m", "magic", "publish"], cwd=root, env=env) == 0
+
+
+def receive(log=print, ask=input, root=None, test=True, ci=ci_status, do_publish=_publish_subprocess):
+    """收更新：抓 GitHub 上的 pending 分支 → 確認雲端測試（Windows + Mac）通過 → 套用到 main →
+    在你的電腦上實際開視窗測流暢度（publish 的發佈前檢查）→ 發佈。任何一步沒過就停下來，資料夾恢復原狀。"""
+    root = root or TOOL_ROOT
+    if not os.path.isdir(os.path.join(root, ".git")):
+        log("這個資料夾不是用 GitHub Desktop 複製（Clone）下來的開發資料夾，沒辦法收更新。")
+        log("請在 D:\\Yeep\\MagicTool（GitHub Desktop Clone 的那一份）裡執行 收更新.bat。")
+        return False
+    git = find_git()
+    if not git:
+        log("找不到 git。請安裝 GitHub Desktop（https://desktop.github.com）或 Git for Windows（https://git-scm.com）。")
+        return False
+
+    def run(*args, check=True):
+        out = subprocess.run([git, *args], cwd=root, capture_output=True, text=True, encoding="utf-8",
+                             errors="replace")
+        if check and out.returncode != 0:
+            raise RuntimeError((out.stderr or out.stdout).strip() or f"git {args[0]} 失敗")
+        return out
+
+    def ok(*args):
+        return run(*args, check=False).returncode == 0
+
+    rel = read_release(os.path.join(root, "release.json"))
+    repo, branch = rel.get("repo", ""), rel.get("branch", "main")
+    pend_ref = f"origin/{PENDING_BRANCH}"
+    log(f"工具資料夾：{root}")
+    log("向 GitHub 查詢待發佈的更新…")
+    out = run("fetch", "origin", branch, PENDING_BRANCH, check=False)
+    if out.returncode != 0:
+        if not ok("fetch", "origin", branch):
+            log(f"連不上 GitHub：{(out.stderr or out.stdout).strip()}")
+            return False
+        run("update-ref", "-d", f"refs/remotes/{pend_ref}", check=False)     # GitHub 上已經沒有 pending
+    if not ok("rev-parse", "--verify", "--quiet", pend_ref):
+        log("\n目前沒有待發佈的更新。")
+        return True
+    pend = run("rev-parse", pend_ref).stdout.strip()
+    if ok("merge-base", "--is-ancestor", pend_ref, f"origin/{branch}"):
+        log(f"\n待發佈的更新已經發佈過了（GitHub 上是 v{rel.get('version')}），不需要再收。")
+        return True
+
+    # ---- 你這台的資料夾要是乾淨的（沒有還沒發佈的修改），才不會把兩邊的東西混在一起 ----
+    dirty = [l for l in run("status", "--porcelain").stdout.splitlines() if l.strip()]
+    if dirty:
+        log("\n你的資料夾有還沒發佈的修改，為了不混在一起，這次先不收更新：")
+        for l in dirty[:15]:
+            log(f"  {l}")
+        log("→ 要保留：先執行 publish.bat 發佈；不要了：在 GitHub Desktop 對檔案按右鍵 → Discard changes。然後再按一次 收更新。")
+        return False
+    if run("rev-parse", "--abbrev-ref", "HEAD").stdout.strip() != branch:
+        run("checkout", branch)
+        log(f"已切換到 {branch} 分支")
+    if not ok("merge-base", "--is-ancestor", "HEAD", pend_ref) and ok("merge-base", "--is-ancestor", "HEAD",
+                                                                     f"origin/{branch}"):
+        run("merge", "--ff-only", f"origin/{branch}")          # 本機落後 GitHub：先跟上
+    if not ok("merge-base", "--is-ancestor", "HEAD", pend_ref):
+        log("\n待發佈的更新是接在比較舊的版本上（之後你自己又發佈或修改過），不能直接套用。")
+        log("→ 跟 Claude 說：「pending 要重新接在最新的 main 上」。你的資料夾沒有改變。")
+        return False
+
+    # ---- 雲端測試（真的 Windows + Mac）要先通過 ----
+    state, msg = ci(repo, pend)
+    log(f"雲端測試（Windows + Mac）：{msg}")
+    if state == "running":
+        log(f"→ 測試還沒跑完（通常 5–10 分鐘），等一下再按一次 收更新。進度：{actions_url(repo)}")
+        return False
+    if state == "failure":
+        log(f"→ 沒有通過，所以不會發佈。詳細：{actions_url(repo)}（把這段訊息貼給 Claude 就可以修正）")
+        return False
+    if state in ("none", "error"):
+        if (ask("找不到雲端測試結果，仍要繼續（你的電腦上還是會跑完整測試）？輸入 y 繼續，直接 Enter = 取消：")
+                or "").strip().lower() not in ("y", "yes"):
+            log("已取消，資料夾沒有改變。")
+            return False
+
+    try:
+        new = json.loads(run("show", f"{pend}:release.json").stdout)
+    except Exception:
+        new = {}
+    log(f"\n待發佈：v{new.get('version', '?')}（目前 v{rel.get('version', '?')}）")
+    for n in new.get("notes", [])[:12]:
+        log(f"  · {n}")
+
+    old = run("rev-parse", "HEAD").stdout.strip()
+    run("merge", "--ff-only", pend_ref)
+    log("\n已套用到你的資料夾。接下來在你的電腦上實際開視窗測試，通過才會發佈給同事：\n")
+    done = do_publish(root, log=log, ask=ask, test=test)
+    if done:
+        return True
+    run("fetch", "origin", branch, check=False)
+    if ok("merge-base", "--is-ancestor", pend, f"origin/{branch}"):
+        return True                                               # 其實已經上傳了
+    if run("rev-parse", "HEAD").stdout.strip() == pend:
+        run("reset", "--hard", old)                              # 沒有發佈：恢復成收更新之前的樣子
+        log("\n這次沒有發佈，資料夾已經恢復成收更新之前的版本（同事那邊完全沒有影響）。")
+        log("把上面 ✗ 的訊息貼給 Claude 修正後，再按一次 收更新。")
+    return False

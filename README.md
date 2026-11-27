@@ -9,10 +9,12 @@ MagicTool\
 ├─ run_magic.bat        ← 開啟軟體（可以複製到任何地方；把檔案或資料夾拖上去會直接開啟）
 ├─ MagicTool.pyw        ← 直接開啟軟體（工作列釘選的圖示執行的就是它）
 ├─ publish.bat          ← 開發者：一鍵發佈到 GitHub（同事會收到更新）
+├─ 收更新.bat           ← 開發者：收 Claude 準備好的更新（pending）→ 測試 → 發佈
 ├─ magic_env.bat        ← 尋找電腦上的 Python（給上面的啟動檔用）
 ├─ install.command      ← Mac：第一次執行，建立「Magic Tool.app」（應用程式 + 桌面）
 ├─ run_magic.command    ← Mac：開啟軟體 / selftest / update / publish（和 run_magic.bat 一樣）
 ├─ publish.command      ← Mac：開發者發佈到 GitHub
+├─ 收更新.command       ← Mac：和 收更新.bat 一樣
 ├─ magic_env.sh         ← Mac / Linux：尋找電腦上的 Python
 ├─ release.json         ← 版本號與更新內容（版本號只寫在這裡）
 ├─ 發佈與更新.md         ← 第一次上傳 GitHub、之後每次發佈的步驟
@@ -22,7 +24,8 @@ MagicTool\
 │   ├─ ppms\  squid\  raman\  etching\     ← 每台機台一個資料夾，一個分析一個檔案
 │   └─ gui\             軟體介面
 ├─ notebooks\           ← 四台機台的 notebook（呼叫 magic\ 的同一份程式；上傳前自動清掉輸出）
-├─ tests\               ← pytest（只用合成資料）
+├─ tests\               ← pytest（只用合成資料；cp950\ 模擬繁體中文 Windows 的編碼）
+├─ .github\             ← GitHub Actions：推到 pending 時在真的 Windows / Mac / Linux 上跑全部測試
 └─ assets\              ← 圖示
 ```
 

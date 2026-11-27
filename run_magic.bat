@@ -11,6 +11,7 @@ REM  run_magic.bat selftest        run the self test (synthetic data only)
 REM  run_magic.bat diag            show diagnostics
 REM  run_magic.bat update          check GitHub for a new version
 REM  run_magic.bat publish         developer: upload this version to GitHub
+REM  run_magic.bat receive         developer: take the update Claude put on "pending", test, publish
 REM ============================================================
 setlocal EnableExtensions
 set "PYTHONUTF8=1"
@@ -36,6 +37,7 @@ if /i "%ARG%"=="uninstall" goto uninstall
 if /i "%ARG%"=="update" goto update
 if /i "%ARG%"=="diag" goto diag
 if /i "%ARG%"=="publish" goto publish
+if /i "%ARG%"=="receive" goto receive
 goto guipath
 
 :gui
@@ -73,6 +75,11 @@ exit /b
 
 :publish
 "%PYEXE%" -m magic publish
+pause
+exit /b
+
+:receive
+"%PYEXE%" -m magic receive
 pause
 exit /b
 

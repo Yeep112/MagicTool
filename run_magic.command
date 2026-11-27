@@ -11,6 +11,7 @@
 #    ./run_magic.command debug           open the program here and show every message (when it won't start)
 #    ./run_magic.command update          check GitHub for a new version
 #    ./run_magic.command publish         developer: upload this version to GitHub
+#    ./run_magic.command receive         developer: take the update Claude put on "pending", test, publish
 #
 #  If double-click says "cannot be opened": open Terminal, type  bash  and a space,
 #  drag this file into the Terminal window, press Enter.
@@ -74,6 +75,7 @@ case "${1:-gui}" in
         tail -n 30 "$MT_DATA/logs/error.log" 2>/dev/null
         pause ;;
     publish) "$PYEXE" -m magic publish; pause ;;
+    receive) "$PYEXE" -m magic receive; pause ;;
     *)
         nohup "$PYW" -m magic app "$1" >/dev/null 2>&1 &
         close_terminal_window

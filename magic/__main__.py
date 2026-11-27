@@ -5,6 +5,7 @@
   python -m magic selftest [--no-gui]  自我測試（合成資料，不會碰到真實資料）
   python -m magic selftest --release   發佈前檢查：一定要實際開視窗、量切換 / 計算 / 動畫的流暢度
   python -m magic publish              開發者：一鍵發佈到 GitHub
+  python -m magic receive              開發者：收 Claude 推到 pending 的更新 → 測試 → 發佈
   python -m magic update               檢查並安裝新版
   python -m magic demo [資料夾]        產生範例資料（合成資料）
   python -m magic strip-notebooks      清掉 notebooks\\ 的輸出
@@ -34,6 +35,9 @@ def main(argv=None):
     if cmd == "publish":
         from .updater import publish
         return 0 if publish() else 1
+    if cmd == "receive":
+        from .updater import receive
+        return 0 if receive() else 1
     if cmd == "update":
         from . import updater
         info = updater.check()

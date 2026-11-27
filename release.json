@@ -1,14 +1,25 @@
 {
-  "version": "0.5.3",
+  "version": "0.5.4",
   "repo": "Yeep112/MagicTool",
   "branch": "main",
-  "date": "2026-11-26",
+  "date": "2026-11-27",
   "notes": [
-    "修正 Mac：App 顯示「No module named magic」→ 原因是 macOS 不讓 App 讀「文件 / 桌面 / 下載項目」；安裝時把程式複製到 ~/Library/Application Support/MagicTool/program，App 用那一份",
-    "Mac：舊的 App 找不到程式時，會自動改用複製過去的那一份；錯誤視窗會說明是不是 macOS 隱私權的問題",
-    "Mac：讀不到量測資料夾時，說明到「系統偏好設定 → 安全性與隱私 → 隱私權」允許 Magic Tool"
+    "開發者：新增 收更新.bat / 收更新.command：Claude 把測試過的更新推到 pending 分支，按一下就會確認雲端測試通過 → 套用 → 在你的電腦上開視窗測流暢度 → 發佈；任何一步沒過就不發佈、資料夾恢復原狀",
+    "GitHub Actions 雲端測試：每次推到 pending，在真的 Windows、Mac、Linux 上跑 pytest 與完整自我測試（含實際開視窗）",
+    "新增 cp950 編碼模擬（繁體中文 Windows 從捷徑開啟時的情況），自我測試裡幾個沒寫 encoding 的地方補上",
+    "自我測試：電腦上的 Python 沒有 tkinter 時，macOS 啟動檔的「找 Python」小項改成略過，不再顯示 ✗",
+    "補上 發佈與更新.md（README 有提到但原本沒有這個檔案）"
   ],
   "history": [
+    {
+      "version": "0.5.3",
+      "date": "2026-11-26",
+      "notes": [
+        "修正 Mac：App 顯示「No module named magic」→ 原因是 macOS 不讓 App 讀「文件 / 桌面 / 下載項目」；安裝時把程式複製到 ~/Library/Application Support/MagicTool/program，App 用那一份",
+        "Mac：舊的 App 找不到程式時，會自動改用複製過去的那一份；錯誤視窗會說明是不是 macOS 隱私權的問題",
+        "Mac：讀不到量測資料夾時，說明到「系統偏好設定 → 安全性與隱私 → 隱私權」允許 Magic Tool"
+      ]
+    },
     {
       "version": "0.5.2",
       "date": "2026-11-26",
