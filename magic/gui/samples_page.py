@@ -119,7 +119,9 @@ class SamplePage:
         self.rescan()
 
     def save_figure(self):
-        self.app.status("樣品頁沒有圖可以存（一鍵匯出 PPT 會在之後的版本加入）", "warn")
+        if self.sample:
+            return self.save_visual()
+        self.app.status("先選一個樣品", "warn")
 
     export = save_figure
 
@@ -264,12 +266,23 @@ class SamplePage:
                                 wraplength=T.px(440))
         self.rv_full.pack(fill="x", pady=(4, 0))
 
-        # ---------------- 右：步驟細節
+        # ---------------- 右：步驟細節 / 示意圖（剖面 + 俯視 + 逐步動畫）
         self.detail = tk.Frame(app.right_host, bg=T.CARD)
+        vb = tk.Frame(self.detail, bg=T.CARD)
+        vb.pack(fill="x", pady=(0, 6))
+        self.view_mode = self.st.get("view", "detail")
+        self.v_detail = ttk.Button(vb, text="📋 細節", command=lambda: self.set_view("detail"))
+        self.v_visual = ttk.Button(vb, text="🎞 示意圖（剖面 / 俯視）", command=lambda: self.set_view("visual"))
+        self.v_detail.pack(side="left")
+        self.v_visual.pack(side="left", padx=(6, 0))
         self.sf = ScrollFrame(self.detail)
-        self.sf.pack(fill="both", expand=True)
         self.body = self.sf.body
+        self.vis = None
+        self._outlines = {}
+        self._play_job = None
+        self.vis_step = None
         self._show_empty()
+        self.set_view(self.view_mode, redraw=False)
 
     # ================================================================== 掃描
     def _make_lib(self):
@@ -393,6 +406,8 @@ class SamplePage:
             self.s_res.configure(text="")
             self.prev_lab.configure(text="")
             self._show_empty()
+            if self.view_mode == "visual":
+                self.vis_refresh()
             return
         rec = self.record(s)
         st = rec.get("status") or {}
@@ -456,6 +471,9 @@ class SamplePage:
         else:
             self.step_id = None
             self._show_overview(s, rec)
+        if self.view_mode == "visual":
+            self.vis_step = None if not keep_step else self.vis_step
+            self.vis_refresh()
 
     def _show_review_text(self):
         sel = self.rv_list.curselection()
@@ -483,6 +501,8 @@ class SamplePage:
         step = next((x for x in rec.get("steps", []) if x["id"] == sel[0]), None)
         if step:
             self._show_step(self.sample, rec, step)
+            if self.view_mode == "visual":
+                self.vis_goto(rec["steps"].index(step))
 
     def select_step(self, sid):
         if self.tl.exists(sid):
@@ -846,6 +866,188 @@ class SamplePage:
         self.lib = lib
         self.refresh_list()
         self._update_review_btn()
+
+    # ================================================================== v0.8：示意圖
+    def set_view(self, mode, redraw=True):
+        self.view_mode = mode
+        self.st["view"] = mode
+        self.v_detail.configure(style=f"{KEY}.Accent.TButton" if mode == "detail" else f"{KEY}.Small.TButton")
+        self.v_visual.configure(style=f"{KEY}.Accent.TButton" if mode == "visual" else f"{KEY}.Small.TButton")
+        if mode == "visual":
+            self.sf.pack_forget()
+            self._build_vis()
+            self.vis["frame"].pack(fill="both", expand=True)
+            if redraw:
+                self.vis_refresh()
+        else:
+            self.stop_play()
+            if self.vis:
+                self.vis["frame"].pack_forget()
+            self.sf.pack(fill="both", expand=True)
+        if redraw:
+            self.app.save_state_soon()
+
+    def _build_vis(self):
+        if self.vis:
+            return
+        from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+        from matplotlib.figure import Figure
+        from ..core import plotstyle
+        plotstyle.apply()
+        fr = tk.Frame(self.detail, bg=T.CARD)
+        ctl = tk.Frame(fr, bg=T.CARD)
+        ctl.pack(side="bottom", fill="x", pady=(6, 0))
+        v = {"frame": fr}
+        v["first"] = ttk.Button(ctl, text="⏮", width=3, style=f"{KEY}.Small.TButton", command=lambda: self.vis_goto(-1))
+        v["prev"] = ttk.Button(ctl, text="◀", width=3, style=f"{KEY}.Small.TButton", command=lambda: self.vis_step_by(-1))
+        v["play"] = ttk.Button(ctl, text="▶ 播放", style=f"{KEY}.Accent.TButton", command=self.toggle_play)
+        v["next"] = ttk.Button(ctl, text="▶", width=3, style=f"{KEY}.Small.TButton", command=lambda: self.vis_step_by(1))
+        v["last"] = ttk.Button(ctl, text="⏭", width=3, style=f"{KEY}.Small.TButton", command=lambda: self.vis_goto(None))
+        for w in ("first", "prev", "play", "next", "last"):
+            v[w].pack(side="left", padx=(0, 4))
+        v["save"] = ttk.Button(ctl, text="存圖", style=f"{KEY}.Small.TButton", command=self.save_visual)
+        v["save"].pack(side="right")
+        v["scale"] = tk.Scale(fr, from_=0, to=1, orient="horizontal", showvalue=False, bg=T.CARD, highlightthickness=0,
+                              troughcolor=T.CHIP, bd=0, sliderrelief="flat", command=self._on_scale)
+        v["scale"].pack(side="bottom", fill="x")
+        v["cap"] = tk.Label(fr, text="", bg=T.CARD, fg=T.TEXT, font=T.font(10, "bold"), anchor="w", justify="left",
+                            wraplength=T.px(520))
+        v["cap"].pack(side="bottom", fill="x")
+        v["fig"] = Figure(figsize=(6, 6), dpi=100)
+        v["canvas"] = FigureCanvasTkAgg(v["fig"], master=fr)
+        v["canvas"].get_tk_widget().pack(fill="both", expand=True)
+        v["canvas"].get_tk_widget().configure(bg="white", highlightthickness=0)
+        self.vis = v
+
+    def outlines(self, s):
+        """digitalize 的輪廓（背景讀，讀完再畫一次）。"""
+        if not s or not s.get("has_folder"):
+            return []
+        if s["key"] in self._outlines:
+            return self._outlines[s["key"]]
+        self._outlines[s["key"]] = []
+        from ..fab import visual as V
+
+        def work():
+            try:
+                got = V.find_outlines(s["dir"])
+            except Exception:
+                got = []
+            self.app.post(("call", lambda: self._got_outlines(s, got)))
+        self.app.submit(work)
+        return []
+
+    def _got_outlines(self, s, got):
+        self._outlines[s["key"]] = got
+        if got and self.view_mode == "visual" and self.sample and self.sample["key"] == s["key"]:
+            self.vis_refresh()
+
+    def vis_refresh(self):
+        if not self.vis:
+            return
+        rec = self.record() if self.sample else None
+        n = len(rec.get("steps", [])) if rec else 0
+        sc = self.vis["scale"]
+        sc.configure(to=max(0, n - 1), state="normal" if n > 1 else "disabled")
+        if self.vis_step is None or self.vis_step >= n:
+            self.vis_step = n - 1
+        self._vis_lock = True
+        sc.set(max(0, self.vis_step))
+        self._vis_lock = False
+        self._vis_draw()
+
+    def _vis_draw(self):
+        from ..fab import visual as V
+        v = self.vis
+        fig = v["fig"]
+        fig.clear()
+        rec = self.record() if self.sample else None
+        if not rec:
+            v["cap"].configure(text="選一個樣品")
+            v["canvas"].draw_idle()
+            return
+        steps = rec.get("steps", [])
+        i = self.vis_step if steps else -1
+        gs = fig.add_gridspec(2, 1, height_ratios=[1.15, 1])
+        try:
+            V.draw_section(fig.add_subplot(gs[0]), rec, i if steps else None, highlight=True)
+            V.draw_top(fig.add_subplot(gs[1]), rec, self.outlines(self.sample), i if steps else None)
+            fig.tight_layout(pad=0.6)
+        except Exception as e:                                   # 示意圖畫不出來不要影響其他功能
+            self.app.log(f"示意圖：{e}")
+        if steps:
+            st = steps[i]
+            v["cap"].configure(text=f"第 {i + 1} / {len(steps)} 步　{K.icon(st['kind'])} {K.step_name(st)}　" +
+                               _date_text(st.get("date", ""), st.get("date_end", "")) + "\n" + K.summary(st))
+        else:
+            v["cap"].configure(text="還沒有步驟：按「＋ 新增步驟」")
+        v["canvas"].draw_idle()
+
+    def _on_scale(self, val):
+        if getattr(self, "_vis_lock", False):
+            return
+        i = int(float(val))
+        if i != self.vis_step:
+            self.vis_step = i
+            self._vis_draw()
+
+    def vis_goto(self, i):
+        if not self.vis:
+            return
+        rec = self.record() if self.sample else None
+        n = len(rec.get("steps", [])) if rec else 0
+        if not n:
+            return
+        self.vis_step = (n - 1 if i is None else 0 if i < 0 else min(i, n - 1))
+        self._vis_lock = True
+        self.vis["scale"].set(self.vis_step)
+        self._vis_lock = False
+        self._vis_draw()
+
+    def vis_step_by(self, d):
+        self.vis_goto(max(0, (self.vis_step or 0) + d))
+
+    def toggle_play(self):
+        if self._play_job:
+            self.stop_play()
+            return
+        rec = self.record() if self.sample else None
+        if not rec or not rec.get("steps"):
+            return
+        if self.vis_step is None or self.vis_step >= len(rec["steps"]) - 1:
+            self.vis_goto(0)
+        self.vis["play"].configure(text="⏸ 暫停")
+        self._play_job = self.app.root.after(900, self._play_tick)
+
+    def _play_tick(self):
+        self._play_job = None
+        rec = self.record() if self.sample else None
+        if not rec or self.view_mode != "visual" or self.vis_step >= len(rec.get("steps", [])) - 1:
+            self.stop_play()
+            return
+        self.vis_step_by(1)
+        self._play_job = self.app.root.after(900, self._play_tick)
+
+    def stop_play(self):
+        if self._play_job:
+            self.app.root.after_cancel(self._play_job)
+            self._play_job = None
+        if self.vis:
+            self.vis["play"].configure(text="▶ 播放")
+
+    def save_visual(self, path=None):
+        if not self.sample:
+            return None
+        from ..fab import visual as V
+        if path is None:
+            path = filedialog.asksaveasfilename(parent=self.app.root, defaultextension=".png",
+                                                initialfile=f"{R.safe_name(self.sample['label'])}_示意圖.png",
+                                                filetypes=[("PNG", "*.png")])
+            if not path:
+                return None
+        V.render_png(path, self.record(), self.outlines(self.sample), self.vis_step, size=(9, 5.4))
+        self.app.status(f"已存圖：{path}", "ok", open_path=path)
+        return path
 
     # ================================================================== v0.7：編輯
     def user(self):
