@@ -9,7 +9,7 @@ import tkinter as tk
 from tkinter import filedialog, ttk
 
 from . import theme as T
-from .widgets import Chip, section_title
+from .widgets import Chip, section_title, fit_label
 
 KIND_NAMES = {"PPMS": "PPMS", "SQUID": "SQUID", "QD": "QD", "Raman": "光譜", "?": "?", "": "…"}
 
@@ -42,12 +42,14 @@ class FilePanel(tk.Frame):
 
         fr = tk.Frame(self, bg=T.CARD)
         fr.pack(fill="x", pady=(8, 4))
-        self.folder_lab = tk.Label(fr, text="（還沒有選資料夾）", bg=T.CHIP, fg=T.MUTED, font=T.font(9), anchor="w",
-                                   padx=8, pady=4)
-        self.folder_lab.pack(side="left", fill="x", expand=True)
+        # 按鈕先放（優先拿到寬度，不會被長路徑擠扁）；路徑跟著寬度換行
         ttk.Button(fr, text="↻", width=3, style=f"{key}.Small.TButton", command=self.rescan).pack(side="right", padx=(4, 0))
         ttk.Button(fr, text="選檔案", style=f"{key}.Small.TButton", command=self.pick_files).pack(side="right", padx=(4, 0))
         ttk.Button(fr, text="選資料夾", style=f"{key}.Small.TButton", command=self.pick_folder).pack(side="right", padx=(4, 0))
+        self.folder_lab = tk.Label(fr, text="（還沒有選資料夾）", bg=T.CHIP, fg=T.MUTED, font=T.font(9), anchor="w",
+                                   justify="left", padx=8, pady=4)
+        self.folder_lab.pack(side="left", fill="x", expand=True)
+        fit_label(self.folder_lab, 16)
 
         ff = tk.Frame(self, bg=T.CARD)
         ff.pack(fill="x", pady=(0, 4))

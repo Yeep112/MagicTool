@@ -12,6 +12,7 @@ import tkinter as tk
 from tkinter import filedialog, ttk
 
 from . import theme as T
+from .widgets import fit_window
 
 FILETYPES = [("圖片", "*.png *.jpg *.jpeg *.tif *.tiff *.bmp *.gif"), ("全部", "*.*")]
 
@@ -117,7 +118,7 @@ class OMViewer(tk.Toplevel):
         self.title(title)
         self.configure(bg=T.CARD)
         self.transient(parent)
-        self.geometry(f"{T.px(1100 if len(items) > 1 else 760)}x{T.px(620)}")
+        fit_window(self, T.px(1100 if len(items) > 1 else 760), T.px(620), 420, 320)
         self.items = items
         self.labels = []
         self._imgs = []

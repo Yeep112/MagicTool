@@ -13,6 +13,7 @@ from tkinter import colorchooser, ttk
 
 from ..raman import labels as L
 from . import theme as T
+from .widgets import fit_window
 
 COLS = [("show", "顯示", 44), ("text", "文字", 110), ("x", "位置 (cm⁻¹)", 84), ("follow", "跟隨擬合", 84),
         ("color", "顏色", 70), ("size", "大小", 44), ("font", "字型", 120)]
@@ -42,8 +43,7 @@ class PeakLabelDialog(tk.Toplevel):
         self.title("峰標註")
         self.configure(bg=T.CARD)
         self.transient(page.app.root)
-        self.geometry(f"{T.px(720)}x{T.px(600)}")
-        self.minsize(560, 460)
+        fit_window(self, T.px(720), T.px(600), 560, 420)
         self._job = None
         self._loading = False
         a = T.accent(self.key)

@@ -18,6 +18,7 @@ from matplotlib.widgets import SpanSelector
 
 from ..etching.afm import read_profiles, step_height
 from . import theme as T
+from .widgets import fit_window
 
 # 每個欄位：低、高平台分別是什麼（給使用者看的說明）
 WHAT = {
@@ -43,8 +44,7 @@ class AfmImportDialog(tk.Toplevel):
         self.title(f"從 AFM profile 找台階 — {label or key}")
         self.configure(bg=T.CARD)
         self.transient(wizard)
-        self.geometry(f"{T.px(1080)}x{T.px(700)}")
-        self.minsize(820, 560)
+        fit_window(self, T.px(1080), T.px(700), 820, 520)
         self.profiles = []          # [dict(profile, result, use, manual=(lo, hi))]
         self.cur = None
         a = T.accent(self.k)

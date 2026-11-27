@@ -14,7 +14,7 @@ from ..fab import etchrate as ER
 from ..fab import folders as F
 from ..fab import steps as K
 from . import theme as T
-from .widgets import ScrollFrame
+from .widgets import ScrollFrame, fit_to_content, fit_window
 
 KEY = "Samples"
 
@@ -137,8 +137,7 @@ class StepEditor(_Dialog):
         self.title("新增步驟" if self.new else f"編輯：{K.step_name(step)}")
         self.configure(bg=T.CARD, padx=14, pady=12)
         self.transient(page.app.root)
-        self.geometry(f"{T.px(900)}x{T.px(640)}")
-        self.minsize(T.px(640), T.px(420))
+        fit_window(self, T.px(900), T.px(640), T.px(600), T.px(380))
         self.prev_afm = self._prev_afm()
         top = tk.Frame(self, bg=T.CARD)
         top.pack(fill="x")
@@ -382,6 +381,7 @@ class StateDialog(_Dialog):
         bf.grid(row=5, column=0, columnspan=2, sticky="e", pady=(10, 0))
         ttk.Button(bf, text="取消", style=f"{KEY}.Ghost.TButton", command=self.destroy).pack(side="right")
         ttk.Button(bf, text=zh, style=f"{KEY}.Accent.TButton", command=self.ok).pack(side="right", padx=(0, 6))
+        fit_to_content(self, T.px(10), T.px(10))
 
     def ok(self):
         try:
@@ -483,6 +483,7 @@ class ResultDialog(_Dialog):
         self._load()
         if self.cands:
             self._apply_cand()
+        fit_to_content(self, T.px(10), T.px(10))
 
     def _guess(self):
         """量測檔案在哪個樣品資料夾裡 → 預設選那個樣品；不然選目前在樣品頁選的。"""
@@ -569,6 +570,7 @@ class NewSampleDialog(_Dialog):
         bf.grid(row=r + 3, column=0, columnspan=2, sticky="e", pady=(10, 0))
         ttk.Button(bf, text="取消", style=f"{KEY}.Ghost.TButton", command=self.destroy).pack(side="right")
         ttk.Button(bf, text="建立", style=f"{KEY}.Accent.TButton", command=self.ok).pack(side="right", padx=(0, 6))
+        fit_to_content(self, T.px(10), T.px(10))
 
     def ok(self):
         lab = self.v["label"].get().strip()
@@ -614,6 +616,7 @@ class SyncDialog(_Dialog):
         self.b_go = ttk.Button(bf, text="⬆ 更新待更新的樣品", style=f"{KEY}.Accent.TButton", command=self.push_pending)
         self.b_go.pack(side="right", padx=(0, 6))
         self.refresh()
+        fit_to_content(self, 0, T.px(60))
 
     def refresh(self, extra=""):
         pend = self.page.pending_sync()
@@ -670,8 +673,7 @@ class ExportDialog(_Dialog):
         self.title("匯出 PPT")
         self.configure(bg=T.CARD, padx=14, pady=12)
         self.transient(page.app.root)
-        self.geometry(f"{T.px(1000)}x{T.px(700)}")
-        self.minsize(T.px(760), T.px(520))
+        fit_window(self, T.px(1000), T.px(700), T.px(720), T.px(480))
         tk.Label(self, text="📤 一鍵匯出 PPT", bg=T.CARD, fg=T.TEXT, font=T.font(13, "bold"), anchor="w").pack(fill="x")
         tk.Label(self, text="選一顆 = 單一樣品報告；選好幾顆 = 同一份裡比較（Ctrl / Shift 多選）。模板會存在每顆樣品的紀錄檔，下次匯出沿用。",
                  bg=T.CARD, fg=T.MUTED, font=T.font(9), anchor="w").pack(fill="x", pady=(2, 8))

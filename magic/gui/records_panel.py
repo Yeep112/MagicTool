@@ -12,7 +12,7 @@ from tkinter import filedialog, messagebox, ttk
 from ..core import settings as S
 from ..etching import gsync, store
 from . import theme as T
-from .widgets import Chip, section_title
+from .widgets import Chip, WrapRow, fit_label, fit_window, section_title
 
 COLS = [("#", "#", 40, "e"), ("DateTime", "日期", 142, "w"), ("Material", "材料", 56, "w"),
         ("Method", "機台", 62, "w"), ("Gas", "氣體", 70, "w"), ("Power", "功率", 110, "w"),
@@ -41,19 +41,20 @@ class RecordsPanel(tk.Frame):
         self.count = Chip(head, "")
         self.count.pack(side="right")
 
-        bar = tk.Frame(self, bg=T.CARD)
+        bar = WrapRow(self, bg=T.CARD, padx=6)                     # 欄位窄的時候自動換行（按鈕不會被擠扁）
         bar.pack(fill="x", pady=(8, 4))
-        ttk.Button(bar, text="＋ 新增紀錄", style=f"{key}.Accent.TButton", command=self.new_record).pack(side="left")
-        ttk.Button(bar, text="↻", width=3, style=f"{key}.Small.TButton", command=self.reload).pack(side="left", padx=(6, 0))
+        bar.add(ttk.Button(bar, text="＋ 新增紀錄", style=f"{key}.Accent.TButton", command=self.new_record))
+        bar.add(ttk.Button(bar, text="↻", width=3, style=f"{key}.Small.TButton", command=self.reload))
         self.source_var = tk.StringVar(value=SOURCES[0])
         cb = ttk.Combobox(bar, textvariable=self.source_var, values=SOURCES, state="readonly", width=10)
-        cb.pack(side="left", padx=(6, 0))
+        bar.add(cb)
         cb.bind("<<ComboboxSelected>>", lambda e: self.reload())
         sync_b = ttk.Button(bar, text="☁ 同步", style=f"{key}.Small.TButton", command=self.sync_dialog)
-        sync_b.pack(side="left", padx=(6, 0))
         from .params_panel import Tooltip
-        Tooltip(sync_b, "比對本機 CSV 和 Google Sheet：把 Google Sheet 的舊紀錄加到本機，或把本機的紀錄補上傳")
-        bar2 = tk.Frame(self, bg=T.CARD)
+        Tooltip(sync_b, "☁ 同步：比對本機 CSV 和 Google Sheet：把 Google Sheet 的舊紀錄加到本機，或把本機的紀錄補上傳")
+        sync_b._has_tip = True
+        bar.add(sync_b, compact="☁")
+        bar2 = WrapRow(self, bg=T.CARD, padx=4)
         bar2.pack(fill="x", pady=(0, 4))
         for text, cmd, tip in (("✎ 修改", self.edit_selected, "修改選取的那一筆（也可以在表格上雙擊）；修改前的值會留在修改歷史"),
                                ("🗑 刪除", self.delete_selected, "刪除選取的紀錄；刪掉的紀錄會留在修改歷史，可以還原"),
@@ -62,16 +63,19 @@ class RecordsPanel(tk.Frame):
                                ("複製條件", self.new_from_selected, "用選取那一筆的條件開新紀錄（量測值留空）"),
                                ("匯出 Excel", self.export_xlsx, "")):
             b = ttk.Button(bar2, text=text, style=f"{key}.Small.TButton", command=cmd)
-            b.pack(side="left", padx=(0, 4))
             if tip:
-                from .params_panel import Tooltip
-                Tooltip(b, tip)
+                Tooltip(b, f"{text}：{tip}")
+                b._has_tip = True
+            icon = text.split(" ")[0]
+            bar2.add(b, compact=icon if icon != text else None)       # 很窄時只顯示圖示，滑鼠停上去看說明
 
-        self.path_lab = tk.Label(self, text="", bg=T.CHIP, fg=T.MUTED, font=T.font(9), anchor="w", padx=8, pady=3)
+        self.path_lab = tk.Label(self, text="", bg=T.CHIP, fg=T.MUTED, font=T.font(9), anchor="w", justify="left",
+                                 padx=8, pady=3)
         self.path_lab.pack(fill="x", pady=(0, 4))
+        fit_label(self.path_lab, 16)
         self.banner = tk.Frame(self, bg="#fef3c7", padx=8, pady=4)
-        self.banner_lab = tk.Label(self.banner, text="", bg="#fef3c7", fg="#92400e", font=T.font(9), anchor="w",
-                                   justify="left", wraplength=T.px(330))
+        self.banner_lab = fit_label(tk.Label(self.banner, text="", bg="#fef3c7", fg="#92400e", font=T.font(9),
+                                             anchor="w", justify="left", wraplength=T.px(330)))
         self.banner_lab.pack(side="left", fill="x", expand=True)
         ttk.Button(self.banner, text="備份並升級", style=f"{key}.Small.TButton", command=self.upgrade).pack(side="right")
 
@@ -82,8 +86,8 @@ class RecordsPanel(tk.Frame):
         ttk.Entry(ff, textvariable=self.filter_var).pack(side="left", fill="x", expand=True)
         self.filter_var.trace_add("write", lambda *a: self._schedule_filter())
         self._filter_job = None
-        tk.Label(self, text="篩選：輸入 ICP、SF6、60W… 多個條件用空白分開；沒選任何列 = 畫篩選後的全部",
-                 bg=T.CARD, fg=T.FAINT, font=T.font(8), anchor="w").pack(fill="x")
+        fit_label(tk.Label(self, text="篩選：輸入 ICP、SF6、60W… 多個條件用空白分開；沒選任何列 = 畫篩選後的全部",
+                           bg=T.CARD, fg=T.FAINT, font=T.font(8), anchor="w", justify="left")).pack(fill="x")
 
         tf = tk.Frame(self, bg=T.CARD)
         tf.pack(fill="both", expand=True, pady=(4, 0))
@@ -486,7 +490,7 @@ class RecordsPanel(tk.Frame):
         win.title("修改歷史")
         win.configure(bg=T.CARD)
         win.transient(self.winfo_toplevel())
-        win.geometry(f"{T.px(860)}x{T.px(460)}")
+        fit_window(win, T.px(860), T.px(460), 520, 300)
         tk.Label(win, text=f"修改、刪除過的紀錄（最新的在上面）：{store.history_path(path).name}", bg=T.CARD, fg=T.MUTED,
                  font=T.font(9), anchor="w").pack(fill="x", padx=12, pady=(10, 4))
         f = tk.Frame(win, bg=T.CARD)

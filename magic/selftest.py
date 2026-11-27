@@ -958,6 +958,11 @@ def run_gui(rep, timeout=90):
         for i in range(7):
             wz.select_stage(i)
             root.update()
+            _audit_window(wz, f"Etching 精靈（第 {i + 1} 段）", root)
+        aw = wz.import_afm("mat_out")
+        aw._no_ask = True                      # 不要跳出選檔視窗（雲端沒有人按）
+        _audit_window(aw, "AFM 匯入", root)
+        aw.destroy()
         wz.focus_field("mat_out")
         pump(lambda: False, 0.5)              # 讓切換頁面時排隊的重畫先做完，只量動畫本身
         frame = []
@@ -979,6 +984,7 @@ def run_gui(rep, timeout=90):
         _gui_03(app, root, pump, ep)
         _gui_samples(app, root, pump)
         _gui_sheet(app, root, pump)
+        stats["layout"] = _gui_layout(app, root, pump)
         stats.update(results=results, switch_ms=switch_ms, switch_total=switch_total, bg_gaps=bg_gaps,
                      timings=list(app.timings), fixed_ok=fixed_ok)
         app.close()
@@ -990,6 +996,15 @@ def run_gui(rep, timeout=90):
         except Exception:
             pass
         return
+    def layout():
+        bad = list(stats.get("layout") or [])
+        for b in _LAYOUT_EXTRA:
+            if b not in bad:
+                bad.append(b)
+        if bad:
+            raise AssertionError(f"{len(bad)} 個地方被切掉或超出視窗：\n      " + "\n      ".join(bad[:40]))
+        return "小視窗與大視窗：每一頁、每個對話框都沒有被切掉"
+    rep.check("排版：文字、按鈕沒有被切掉，超出的內容可以捲動", layout)
     sw = sorted(stats["switch_ms"])
     worst_draw = max(t[3] for t in stats["timings"]) if stats["timings"] else 0
     max_gap = stats["bg_gaps"][-1] if stats["bg_gaps"] else 0
@@ -1038,6 +1053,199 @@ def _texts(w):
         pass
     for c in w.winfo_children():
         out += _texts(c)
+    return out
+
+
+_LAYOUT_EXTRA = []          # 其他小視窗（Etching 精靈、Raman 編修、AFM 匯入、峰標註）的排版問題
+
+
+def _audit_window(win, name, root):
+    """小視窗的排版：原本大小、縮到最小的大小，各看一次。"""
+    try:
+        root.update()
+        _LAYOUT_EXTRA.extend(_layout_audit(win, name))
+        mw, mh = win.minsize()
+        if mw > 1 and mh > 1:
+            geo = win.geometry()
+            win.geometry(f"{mw}x{mh}")
+            root.update()
+            _LAYOUT_EXTRA.extend(_layout_audit(win, f"{name}（縮到最小 {mw}×{mh}）"))
+            win.geometry(geo)
+            root.update()
+    except Exception as e:
+        _LAYOUT_EXTRA.append(f"{name}：排版檢查失敗 {e}")
+
+
+_TEXTY = {"Label", "TLabel", "Button", "TButton", "Checkbutton", "TCheckbutton", "Radiobutton", "TRadiobutton"}
+
+
+def _in_scroll(w):
+    """在 ScrollFrame 裡面（直的超出可以捲動）。"""
+    while w is not None:
+        m = getattr(w, "master", None)
+        if m is not None and m.winfo_class() == "Canvas":
+            return True
+        w = m
+    return False
+
+
+def _layout_audit(widget, where=""):
+    """找出被切掉的文字 / 按鈕、超出視窗的元件。回傳 ["位置：說明", …]。"""
+    out = []
+    try:
+        top = widget.winfo_toplevel()
+        tx, ty, tw, th = top.winfo_rootx(), top.winfo_rooty(), top.winfo_width(), top.winfo_height()
+    except Exception:
+        return out
+
+    def walk(w):
+        try:
+            if not w.winfo_ismapped() or not w.winfo_viewable():
+                return
+            cls = w.winfo_class()
+            if cls in _TEXTY:
+                try:
+                    text = str(w.cget("text") or "")
+                except Exception:
+                    text = ""
+                if text.strip() and not str(w.cget("image") or ""):
+                    ww, wh, rw, rh = w.winfo_width(), w.winfo_height(), w.winfo_reqwidth(), w.winfo_reqheight()
+                    t = text.replace("\n", " ")[:24]
+                    scroll = _in_scroll(w)
+                    if ww > 1 and ww + 3 < rw:
+                        out.append(f"{where}：「{t}」被切掉（寬 {ww} < 需要 {rw}）")
+                    elif wh > 1 and wh + 3 < rh and not scroll:
+                        out.append(f"{where}：「{t}」被切掉（高 {wh} < 需要 {rh}）")
+                    elif not scroll and (w.winfo_rootx() + ww > tx + tw + 3 or w.winfo_rooty() + wh > ty + th + 3):
+                        out.append(f"{where}：「{t}」超出視窗")
+            for c in w.winfo_children():
+                walk(c)
+        except Exception:
+            pass
+    walk(widget)
+    return out
+
+
+def _figure_fits(canvas, where):
+    """matplotlib 的圖和畫布一樣大（不然下面會被切掉）。"""
+    try:
+        w = canvas.get_tk_widget()
+        if not w.winfo_ismapped():
+            return []
+        try:
+            fw, fh = canvas.get_width_height(physical=True)
+        except TypeError:
+            fw, fh = (int(v) for v in canvas.figure.bbox.size)
+        ww, wh = w.winfo_width(), w.winfo_height()
+        if ww > 20 and (abs(fw - ww) > 2 or abs(fh - wh) > 2):
+            return [f"{where}：圖 {fw}×{fh} 和畫布 {ww}×{wh} 不一樣大（會被切掉）"]
+    except Exception:
+        pass
+    return []
+
+
+def _gui_layout(app, root, pump):
+    """排版檢查（每次更新都跑）：最小視窗與大視窗，每一頁、樣品頁的細節 / 示意圖、每個對話框。"""
+    from tkinter import messagebox
+    from .gui import samples_edit as SE
+    from .gui import samples_page as SPM
+    from .gui.settings_dialog import SettingsDialog
+    from .testdata import write_samples
+    bad = []
+    # 按鈕列：很窄時先改成只顯示圖示（同一行），變寬再顯示完整文字
+    import tkinter as tk
+    from tkinter import ttk as _ttk
+    from .gui.widgets import WrapRow
+    tw = tk.Toplevel(root)
+    row = WrapRow(tw)
+    row.pack(fill="x")
+    full = ["＋ 新增步驟", "✎ 編輯", "🗑 刪除"]
+    btns = [row.add(_ttk.Button(row, text=t), compact=t.split(" ")[0], side="right") for t in full]
+    tw.geometry("170x60")
+    pump(lambda: False, 0.3)
+    if [b.cget("text") for b in btns] != ["＋", "✎", "🗑"] or len(row._plan[0]) != 1:
+        bad.append(f"按鈕列很窄時沒有改成只顯示圖示（{[b.cget('text') for b in btns]}，{len(row._plan[0])} 行）")
+    tw.geometry("700x60")
+    pump(lambda: False, 0.3)
+    if [b.cget("text") for b in btns] != full:
+        bad.append("按鈕列變寬後沒有恢復完整文字")
+    tw.destroy()
+    old_geo = root.geometry()
+    pg = app.page("Samples")
+    p = write_samples(tempfile.mkdtemp(prefix="magic_layout_"))
+    pg.save_cfg(root=p["root"], sheet=p["sheet"], user="layout")
+    assert pump(lambda: not pg.scanning and pg.lib is not None and pg.lib.root == p["root"], 20)
+    rows = SPM.SH.parse_table(SPM.SH.read_file(p["sheet"]))
+    pg.use_lib(pg.apply_sheet(rows, p["sheet"]))
+    saved = messagebox.askyesno
+    messagebox.askyesno = lambda *a, **k: True
+    try:
+        for size in ("1100x680", "1600x940"):
+            root.geometry(size)
+            pump(lambda: False, 0.4)
+            for key in list(app.pages):
+                app.segment.select(key)
+                root.update()
+                pump(lambda: False, 0.15)
+                page = app.pages[key]
+                for f in page.frames():
+                    bad += _layout_audit(f, f"{size} {key}")
+                cv = getattr(getattr(page, "right", None), "canvas", None)
+                if cv is not None:
+                    bad += _figure_fits(cv, f"{size} {key}")
+            app.segment.select("Samples")
+            s = pg.find("901")
+            pg.refresh_list(select=s["key"])
+            root.update()
+            sid = next(x["id"] for x in pg.record()["steps"] if x["kind"] == "contact")
+            pg.set_view("detail")
+            pg.select_step(sid)
+            pump(lambda: False, 0.4)
+            for f in pg.frames():
+                bad += _layout_audit(f, f"{size} 樣品頁（步驟細節）")
+            pg.set_view("visual")
+            pump(lambda: len(pg._outlines.get(s["key"], [])) > 0, 5)
+            pump(lambda: False, 0.6)
+            bad += _layout_audit(pg.detail, f"{size} 樣品頁（示意圖）")
+            bad += _figure_fits(pg.vis["canvas"], f"{size} 示意圖")
+            sfc = pg.vis["sf"].canvas
+            region = sfc.bbox("all")
+            if region and region[3] > sfc.winfo_height() + 2:
+                top, bottom = sfc.yview()
+                if top <= 0 and bottom >= 1:
+                    bad.append(f"{size} 示意圖：圖比畫面高但不能捲動")
+            pg.set_view("detail")
+            dialogs = [("步驟編輯", lambda: pg.edit_selected_step()), ("匯出 PPT", pg.open_export),
+                       ("樣品設定", lambda: SPM.SampleSettings(pg)), ("從試算表匯入", lambda: SPM.ImportDialog(pg)),
+                       ("待確認", lambda: SPM.ReviewDialog(pg)), ("新樣品", pg.open_new_sample),
+                       ("樣品結果", pg.open_results), ("擱置", lambda: SE.StateDialog(pg, s, "hold")),
+                       ("試算表", pg.open_sync), ("設定", lambda: SettingsDialog(app))]
+            for name, make in dialogs:
+                d = make()
+                root.update()
+                pump(lambda: False, 0.25)
+                bad += _layout_audit(d, f"{size} {name}")
+                if hasattr(d, "nb"):                        # 有分頁的：每一頁都看
+                    for tab in d.nb.tabs()[1:]:
+                        d.nb.select(tab)
+                        root.update()
+                        bad += _layout_audit(d, f"{size} {name}（{d.nb.tab(tab, 'text')}）")
+                try:
+                    if d.winfo_height() > d.winfo_screenheight() or d.winfo_width() > d.winfo_screenwidth():
+                        bad.append(f"{size} {name}：視窗比螢幕大")
+                except Exception:
+                    pass
+                d.destroy()
+    finally:
+        messagebox.askyesno = saved
+        root.geometry(old_geo)
+        pg.save_cfg(root="", sheet="", user="")
+        root.update()
+    seen, out = set(), []
+    for b in bad:
+        if b not in seen:
+            seen.add(b)
+            out.append(b)
     return out
 
 
@@ -1338,6 +1546,19 @@ def _gui_samples_visual(app, root, pump, pg, p):
         root.update()
     per = (time.perf_counter() - t0) / 4
     assert per < 1.5, f"示意圖一步要畫 {per:.2f} 秒"
+    # 放大剖面 / 放大俯視 / 兩張
+    pg.set_vis_zoom("section")
+    root.update()
+    assert len(fig.axes) == 1 and pg.vis["top_ax"] is None, "放大剖面：只畫剖面"
+    pg.set_vis_zoom("top")
+    root.update()
+    assert len(fig.axes) == 1 and pg.vis["top_ax"] is fig.axes[0], "放大俯視：只畫俯視"
+    pg.set_vis_zoom("section")
+    pg.start_cut()
+    assert pg.vis_zoom() == "both", "放大剖面時按切線 → 自動切回兩張（才點得到俯視圖）"
+    pg._cut_pts = None
+    root.update()
+    assert len(fig.axes) == 2
     pg.vis_goto(0)
     pg.toggle_play()
     assert pump(lambda: pg.vis_step >= 2, 6), "播放動畫沒有前進"
@@ -1647,6 +1868,7 @@ def _gui_03(app, root, pump, ep):
         # ---- Raman 編修
         ed = pg.open_raman_editor()
         pump(lambda: ed.x is not None, 5)
+        _audit_window(ed, "Raman 編修", root)
         import numpy as np
         i = int(np.argmax(ed.y))
         n = ed.erase_box(ed.x[i] - 3, ed.x[i] + 3, ed.y[i] * 0.98, ed.y[i] * 1.02, ed.y)
@@ -1754,6 +1976,7 @@ def _gui_03(app, root, pump, ep):
         assert pump(lambda: pg.busy is None and pg.last and pg.last["analysis"].name == "石墨烯 G / 2D 峰"
                     and len(pg.last["items"]) == 1, 20)
         dlg = pg.open_peak_labels()
+        _audit_window(dlg, "峰標註", root)
         dlg.add("D'", 1620.0)
         dlg.tree.selection_set("G")
         root.update()
@@ -1936,6 +2159,9 @@ def main(gui=True, log=print, require_gui=False):
     os.environ.setdefault("MPLBACKEND", "Agg")
     rep = Report(log)
     rep.require_gui = require_gui
+    if os.environ.get("GITHUB_ACTIONS"):                           # 雲端：卡住 20 分鐘就印出卡在哪裡
+        import faulthandler
+        faulthandler.dump_traceback_later(1200, exit=True)
     rep.perf = None
     log(f"Magic Tool 自我測試（{TOOL_ROOT}）" + ("　［發佈前檢查：含實際開視窗與流暢度］" if require_gui else ""))
     try:

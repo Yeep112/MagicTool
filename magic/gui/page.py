@@ -16,7 +16,7 @@ from ..core.plotstyle import PLOT_CYCLE
 from . import theme as T
 from .figure_panel import FigurePanel
 from .params_panel import ParamPanel
-from .widgets import set_if_changed, FeatureList, Paned, ScrollFrame
+from .widgets import set_if_changed, FeatureList, Paned, ScrollFrame, WrapRow
 
 
 class Cancelled(Exception):
@@ -85,24 +85,23 @@ class Page:
         self.p_help = tk.Label(bottom, text="", bg=T.CARD, fg=T.MUTED, font=T.font(8), anchor="w", justify="left",
                                wraplength=T.px(420))
         self.p_help.pack(fill="x", pady=(2, 4))
-        bf = tk.Frame(bottom, bg=T.CARD)
+        bf = WrapRow(bottom, bg=T.CARD, padx=6)                    # 欄位窄的時候按鈕自動換行（不會被擠扁）
         bf.pack(side="bottom", fill="x", pady=(6, 0))
-        ttk.Button(bf, text="▶ 繪圖", style=f"{key}.Accent.TButton", command=self.plot).pack(side="left")
-        ttk.Button(bf, text="存圖", style=f"{key}.Ghost.TButton", command=self.save_figure).pack(side="left", padx=(6, 0))
-        ttk.Button(bf, text="匯出結果", style=f"{key}.Ghost.TButton", command=self.export).pack(side="left", padx=(6, 0))
+        bf.add(ttk.Button(bf, text="▶ 繪圖", style=f"{key}.Accent.TButton", command=self.plot))
+        bf.add(ttk.Button(bf, text="存圖", style=f"{key}.Ghost.TButton", command=self.save_figure))
+        bf.add(ttk.Button(bf, text="匯出結果", style=f"{key}.Ghost.TButton", command=self.export))
         if key in ("PPMS", "SQUID"):
-            ttk.Button(bf, text="📌 寫到樣品", style=f"{key}.Ghost.TButton", command=self.write_to_sample).pack(
-                side="left", padx=(6, 0))
+            bf.add(ttk.Button(bf, text="📌 寫到樣品", style=f"{key}.Ghost.TButton", command=self.write_to_sample),
+                   compact="📌")
         self.auto_var = tk.BooleanVar(value=self.st.get("auto", True))
-        ttk.Checkbutton(bf, text="自動重畫", variable=self.auto_var, style=f"{key}.TCheckbutton",
-                        command=lambda: self.remember(auto=bool(self.auto_var.get()))).pack(side="right")
+        bf.add(ttk.Checkbutton(bf, text="自動重畫", variable=self.auto_var, style=f"{key}.TCheckbutton",
+                               command=lambda: self.remember(auto=bool(self.auto_var.get()))), side="right")
         if key == "Raman":
-            tf = tk.Frame(bottom, bg=T.CARD)
+            tf = WrapRow(bottom, bg=T.CARD, padx=6)
             tf.pack(side="bottom", fill="x", pady=(6, 0))
-            ttk.Button(tf, text="✎ 編修光譜（橡皮擦 / 手動背景）", style=f"{key}.Ghost.TButton",
-                       command=self.open_raman_editor).pack(side="left")
-            ttk.Button(tf, text="🏷 峰標註", style=f"{key}.Ghost.TButton",
-                       command=self.open_peak_labels).pack(side="left", padx=(6, 0))
+            tf.add(ttk.Button(tf, text="✎ 編修光譜（橡皮擦 / 手動背景）", style=f"{key}.Ghost.TButton",
+                              command=self.open_raman_editor))
+            tf.add(ttk.Button(tf, text="🏷 峰標註", style=f"{key}.Ghost.TButton", command=self.open_peak_labels))
         self.p_scroll = ScrollFrame(bottom)
         self.p_scroll.pack(fill="both", expand=True)
         self.p_host = self.p_scroll.body

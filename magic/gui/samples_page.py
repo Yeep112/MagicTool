@@ -23,7 +23,7 @@ from ..fab import steps as K
 from . import theme as T
 from . import samples_edit as SE
 from .samples_edit import _Dialog
-from .widgets import Chip, Paned, ScrollFrame, section_title
+from .widgets import Chip, Paned, ScrollFrame, WrapRow, auto_wrap, fit_label, fit_to_content, fit_window, section_title
 
 KEY = "Samples"
 COLOR = "#db2777"
@@ -161,14 +161,15 @@ class SamplePage:
         row.pack(side="left")
         self.count = Chip(head, "")
         self.count.pack(side="right")
-        self.root_lab = tk.Label(self.left, text="", bg=T.CHIP, fg=T.MUTED, font=T.font(9), anchor="w", justify="left",
-                                 padx=8, pady=4, wraplength=T.px(240))
+        self.root_lab = fit_label(tk.Label(self.left, text="", bg=T.CHIP, fg=T.MUTED, font=T.font(9), anchor="w",
+                                           justify="left", padx=8, pady=4, wraplength=T.px(240)), 18)
         self.root_lab.pack(fill="x", pady=(8, 4))
-        br = tk.Frame(self.left, bg=T.CARD)
+        br = WrapRow(self.left, bg=T.CARD)
         br.pack(fill="x")
-        ttk.Button(br, text="選資料夾", style=f"{KEY}.Small.TButton", command=self.pick_root).pack(side="left")
-        ttk.Button(br, text="↻", width=3, style=f"{KEY}.Small.TButton", command=self.rescan).pack(side="left", padx=4)
-        ttk.Button(br, text="⚙ 樣品設定", style=f"{KEY}.Small.TButton", command=self.open_settings).pack(side="right")
+        br.add(ttk.Button(br, text="選資料夾", style=f"{KEY}.Small.TButton", command=self.pick_root))
+        br.add(ttk.Button(br, text="↻", width=3, style=f"{KEY}.Small.TButton", command=self.rescan))
+        br.add(ttk.Button(br, text="⚙ 樣品設定", style=f"{KEY}.Small.TButton", command=self.open_settings), side="right",
+               compact="⚙")
         fr = tk.Frame(self.left, bg=T.CARD)
         fr.pack(fill="x", pady=(8, 4))
         tk.Label(fr, text="⌕", bg=T.CARD, fg=T.MUTED, font=T.font(11)).pack(side="left", padx=(0, 4))
@@ -182,7 +183,7 @@ class SamplePage:
         lf = tk.Frame(self.left, bg=T.CARD)
         lf.pack(fill="both", expand=True)
         self.tree = ttk.Treeview(lf, columns=("label", "type", "state"), show="headings", selectmode="browse",
-                                 style=f"{KEY}.Treeview")
+                                 style=f"{KEY}.Treeview", height=4)          # 高度可以縮（視窗矮時下面的按鈕不會被擠掉）
         for c, t, w in (("label", "編號", 70), ("type", "類型", 90), ("state", "狀態", 64)):
             self.tree.heading(c, text=t)
             self.tree.column(c, width=T.px(w), anchor="w", stretch=c == "type")
@@ -194,23 +195,22 @@ class SamplePage:
         self.tree.pack(side="left", fill="both", expand=True)
         sb.pack(side="right", fill="y")
         self.tree.bind("<<TreeviewSelect>>", lambda e: self._on_pick_sample())
-        tk.Label(self.left, text="灰色 = 放棄　「·」= 沒有資料夾（紀錄存在這台電腦）", bg=T.CARD, fg=T.FAINT,
-                 font=T.font(8), anchor="w").pack(fill="x", pady=(2, 0))
+        fit_label(tk.Label(self.left, text="灰色 = 放棄　「·」= 沒有資料夾（紀錄存在這台電腦）", bg=T.CARD, fg=T.FAINT,
+                           font=T.font(8), anchor="w", justify="left")).pack(fill="x", pady=(2, 0))
         bf = tk.Frame(self.left, bg=T.CARD)
         bf.pack(fill="x", pady=(8, 0))
-        b0 = tk.Frame(bf, bg=T.CARD)
+        b0 = WrapRow(bf, bg=T.CARD, padx=6)
         b0.pack(fill="x", pady=(0, 6))
-        ttk.Button(b0, text="＋ 新樣品", style=f"{KEY}.Ghost.TButton", command=self.open_new_sample).pack(
-            side="left", fill="x", expand=True)
-        self.sync_btn = ttk.Button(b0, text="☁ 試算表", style=f"{KEY}.Ghost.TButton", command=self.open_sync)
-        self.sync_btn.pack(side="left", padx=(6, 0))
+        b0.add(ttk.Button(b0, text="＋ 新樣品", style=f"{KEY}.Ghost.TButton", command=self.open_new_sample), expand=True)
+        self.sync_btn = b0.add(ttk.Button(b0, text="☁ 試算表", style=f"{KEY}.Ghost.TButton", command=self.open_sync),
+                               compact="☁")
         ttk.Button(bf, text="📥 從試算表匯入", style=f"{KEY}.Accent.TButton", command=self.open_import).pack(fill="x")
-        b2 = tk.Frame(bf, bg=T.CARD)
+        b2 = WrapRow(bf, bg=T.CARD, padx=6)
         b2.pack(fill="x", pady=(6, 0))
-        self.review_btn = ttk.Button(b2, text="⚠ 待確認", style=f"{KEY}.Ghost.TButton", command=self.open_reviews)
-        self.review_btn.pack(side="left", fill="x", expand=True)
-        self.demo_btn = ttk.Button(b2, text="範例樣品", style=f"{KEY}.Small.TButton", command=self.open_demo)
-        self.demo_btn.pack(side="left", padx=(6, 0))
+        self.b2 = b2
+        self.review_btn = b2.add(ttk.Button(b2, text="⚠ 待確認", style=f"{KEY}.Ghost.TButton", command=self.open_reviews),
+                                 expand=True)
+        self.demo_btn = b2.add(ttk.Button(b2, text="範例樣品", style=f"{KEY}.Small.TButton", command=self.open_demo))
 
         # ---------------- 中：樣品資訊 + 時間軸
         self.mid = tk.Frame(app.mid_host, bg=T.CARD)
@@ -227,23 +227,23 @@ class SamplePage:
         self.s_res = tk.Label(card, text="", bg=T.SUBTLE, fg=a["text"], font=T.font(10, "bold"), anchor="w",
                               justify="left")
         self.s_res.pack(fill="x", pady=(4, 0))
-        cbtn = tk.Frame(card, bg=T.SUBTLE)
+        cbtn = WrapRow(card, bg=T.SUBTLE, padx=4, pady=4)           # 放不下自動換行（窄螢幕時「擱置」不會被切掉）
         cbtn.pack(fill="x", pady=(8, 0))
-        cbtn2 = tk.Frame(card, bg=T.SUBTLE)                        # 第二排：狀態與結果（一排放不下，窄螢幕會被切掉）
-        cbtn2.pack(fill="x", pady=(4, 0))
-        self.open_btn = ttk.Button(cbtn, text="📂 開啟樣品資料夾", style=f"{KEY}.Small.TButton", command=self.open_sample_dir)
-        self.open_btn.pack(side="left")
-        self.ppt_btn = ttk.Button(cbtn, text="📤 匯出 PPT", style=f"{KEY}.Small.TButton", command=self.open_export)
-        self.ppt_btn.pack(side="left", padx=(6, 0))
-        self.make_btn = ttk.Button(cbtn, text="建立紀錄檔", style=f"{KEY}.Small.TButton", command=self.create_record)
-        self.hold_btn = ttk.Button(cbtn2, text="⏸ 擱置", style=f"{KEY}.Small.TButton", command=lambda: self.toggle_state("hold"))
-        self.hold_btn.pack(side="left")
-        self.ab_btn = ttk.Button(cbtn2, text="✕ 放棄", style=f"{KEY}.Small.TButton", command=lambda: self.toggle_state("abandoned"))
-        self.ab_btn.pack(side="left", padx=(4, 0))
-        self.res_btn = ttk.Button(cbtn2, text="✎ 結果", style=f"{KEY}.Small.TButton", command=self.open_results)
-        self.res_btn.pack(side="left", padx=(4, 0))
-        self.prev_lab = tk.Label(self.mid, text="", bg=T.CARD, fg=T.WARNING, font=T.font(9), anchor="w", justify="left",
-                                 wraplength=T.px(440))
+        self.cbtn = cbtn
+        self.open_btn = cbtn.add(ttk.Button(cbtn, text="📂 開啟樣品資料夾", style=f"{KEY}.Small.TButton",
+                                            command=self.open_sample_dir), compact="📂")
+        self.ppt_btn = cbtn.add(ttk.Button(cbtn, text="📤 匯出 PPT", style=f"{KEY}.Small.TButton", command=self.open_export),
+                                compact="📤 PPT")
+        self.make_btn = cbtn.add(ttk.Button(cbtn, text="建立紀錄檔", style=f"{KEY}.Small.TButton", command=self.create_record))
+        cbtn.set_visible(self.make_btn, False)
+        self.hold_btn = cbtn.add(ttk.Button(cbtn, text="⏸ 擱置", style=f"{KEY}.Small.TButton",
+                                            command=lambda: self.toggle_state("hold")))
+        self.ab_btn = cbtn.add(ttk.Button(cbtn, text="✕ 放棄", style=f"{KEY}.Small.TButton",
+                                          command=lambda: self.toggle_state("abandoned")))
+        self.res_btn = cbtn.add(ttk.Button(cbtn, text="✎ 結果", style=f"{KEY}.Small.TButton", command=self.open_results),
+                                compact="✎")
+        self.prev_lab = fit_label(tk.Label(self.mid, text="", bg=T.CARD, fg=T.WARNING, font=T.font(9), anchor="w",
+                                           justify="left", wraplength=T.px(440)))
         self.prev_lab.pack(fill="x", pady=(6, 0))
 
         vp = Paned(self.mid, orient="vertical", bg=T.CARD)
@@ -252,21 +252,21 @@ class SamplePage:
         rvf = tk.Frame(vp, bg=T.CARD)
         vp.add_pane(tlf, stretch=True, minsize=T.px(160))
         vp.add_pane(rvf, stretch=False, size=T.px(150), minsize=T.px(70))
-        th = tk.Frame(tlf, bg=T.CARD)
+        th = WrapRow(tlf, bg=T.CARD, padx=4)
         th.pack(fill="x", pady=(0, 4))
         row, _ = section_title(th, "製程時間軸", "⋮", a["main"])
-        row.pack(side="left")
+        th.add(row)
         self.tl_btns = []
-        for txt, cmd in (("🗑", self.delete_selected_step), ("↓", lambda: self.move_selected(1)),
-                         ("↑", lambda: self.move_selected(-1)), ("✎ 編輯", self.edit_selected_step),
-                         ("＋ 新增步驟", self.new_step)):
+        for txt, cmd in (("＋ 新增步驟", self.new_step), ("✎ 編輯", self.edit_selected_step),
+                         ("↑", lambda: self.move_selected(-1)), ("↓", lambda: self.move_selected(1)),
+                         ("🗑", self.delete_selected_step)):
             b = ttk.Button(th, text=txt, style=f"{KEY}.Small.TButton", command=cmd, **({} if len(txt) > 2 else {"width": 3}))
-            b.pack(side="right", padx=(4, 0))
+            th.add(b, side="right", compact=txt.split(" ")[0] if len(txt) > 2 else None)   # 很窄時只顯示圖示
             self.tl_btns.append(b)
         tf = tk.Frame(tlf, bg=T.CARD)
         tf.pack(fill="both", expand=True)
         self.tl = ttk.Treeview(tf, columns=("step", "date", "dirs", "info"), show="headings", selectmode="browse",
-                               style=f"{KEY}.Treeview")
+                               style=f"{KEY}.Treeview", height=5)
         for c, t, w in (("step", "步驟", 130), ("date", "日期", 118), ("dirs", "資料夾", 62), ("info", "內容", 200)):
             self.tl.heading(c, text=t)
             self.tl.column(c, width=T.px(w), anchor="w", stretch=c == "info")
@@ -279,32 +279,30 @@ class SamplePage:
         tsb.pack(side="right", fill="y")
         self.tl.bind("<<TreeviewSelect>>", lambda e: self._on_pick_step())
         self.tl.bind("<Double-Button-1>", lambda e: self.edit_selected_step())
-        rh = tk.Frame(rvf, bg=T.CARD)
+        rh = WrapRow(rvf, bg=T.CARD, padx=4)
         rh.pack(fill="x", pady=(6, 2))
-        self.rv_title = tk.Label(rh, text="⚠ 待確認", bg=T.CARD, fg=T.WARNING, font=T.font(10, "bold"))
-        self.rv_title.pack(side="left")
-        ttk.Button(rh, text="✓ 已確認", style=f"{KEY}.Small.TButton", command=self.resolve_selected).pack(side="right")
-        self.rv_edit = ttk.Button(rh, text="✎ 修改這一步", style=f"{KEY}.Small.TButton", command=self.edit_review_step)
-        self.rv_edit.pack(side="right", padx=(0, 4))
+        self.rv_title = rh.add(tk.Label(rh, text="⚠ 待確認", bg=T.CARD, fg=T.WARNING, font=T.font(10, "bold")))
+        self.rv_edit = rh.add(ttk.Button(rh, text="✎ 修改這一步", style=f"{KEY}.Small.TButton",
+                                         command=self.edit_review_step), side="right", compact="✎")
+        rh.add(ttk.Button(rh, text="✓ 已確認", style=f"{KEY}.Small.TButton", command=self.resolve_selected), side="right",
+               compact="✓")
+        self.rv_full = fit_label(tk.Label(rvf, text="", bg=T.CARD, fg=T.TEXT, font=T.font(9), anchor="w",
+                                          justify="left", wraplength=T.px(440)))
+        self.rv_full.pack(side="bottom", fill="x", pady=(4, 0))      # 先放：區塊變矮時縮的是清單，不是這段說明
+
         self.rv_list = tk.Listbox(rvf, height=4, bd=0, highlightthickness=1, highlightbackground=T.BORDER,
                                   font=T.font(9), activestyle="none", selectbackground=T.mix_color(COLOR, "#ffffff", 0.75),
                                   selectforeground=T.TEXT)
         self.rv_list.pack(fill="both", expand=True)
         self.rv_list.bind("<Double-Button-1>", lambda e: self.edit_review_step())
         self.rv_list.bind("<<ListboxSelect>>", lambda e: self._show_review_text())
-        self.rv_full = tk.Label(rvf, text="", bg=T.CARD, fg=T.TEXT, font=T.font(9), anchor="w", justify="left",
-                                wraplength=T.px(440))
-        self.rv_full.pack(fill="x", pady=(4, 0))
-
         # ---------------- 右：步驟細節 / 示意圖（剖面 + 俯視 + 逐步動畫）
         self.detail = tk.Frame(app.right_host, bg=T.CARD)
-        vb = tk.Frame(self.detail, bg=T.CARD)
+        vb = WrapRow(self.detail, bg=T.CARD, padx=6)
         vb.pack(fill="x", pady=(0, 6))
         self.view_mode = self.st.get("view", "detail")
-        self.v_detail = ttk.Button(vb, text="📋 細節", command=lambda: self.set_view("detail"))
-        self.v_visual = ttk.Button(vb, text="🎞 示意圖（剖面 / 俯視）", command=lambda: self.set_view("visual"))
-        self.v_detail.pack(side="left")
-        self.v_visual.pack(side="left", padx=(6, 0))
+        self.v_detail = vb.add(ttk.Button(vb, text="📋 細節", command=lambda: self.set_view("detail")))
+        self.v_visual = vb.add(ttk.Button(vb, text="🎞 示意圖（剖面 / 俯視）", command=lambda: self.set_view("visual")))
         self.sf = ScrollFrame(self.detail)
         self.body = self.sf.body
         self.vis = None
@@ -351,7 +349,7 @@ class SamplePage:
         if lib.errors:
             self.app.log("樣品紀錄讀取錯誤：\n" + "\n".join(lib.errors))
             self.app.status(f"{len(lib.errors)} 個紀錄檔讀不了（細節在錯誤紀錄）", "warn")
-        self.demo_btn.pack_forget() if self.cfg.get("root") else self.demo_btn.pack(side="left", padx=(6, 0))
+        self.b2.set_visible(self.demo_btn, not self.cfg.get("root"))
         self.refresh_list(select=want)
         self._update_review_btn()
         self._update_sync_btn()
@@ -425,7 +423,7 @@ class SamplePage:
     def _show_sample(self, s, keep_step=False):
         self.tl.delete(*self.tl.get_children())
         self.rv_list.delete(0, "end")
-        self.make_btn.pack_forget()
+        self.cbtn.set_visible(self.make_btn, False)
         on = ["!disabled"] if s is not None else ["disabled"]
         for b in [self.hold_btn, self.ab_btn, self.res_btn, self.ppt_btn] + self.tl_btns:
             b.state(on)
@@ -474,7 +472,7 @@ class SamplePage:
         if s.get("rec") is None:
             self.prev_lab.configure(text="還沒有紀錄檔：下面是依資料夾與試算表自動產生的初版，按「建立紀錄檔」或"
                                          "「📥 從試算表匯入」存起來。")
-            self.make_btn.pack(side="left", padx=(6, 0))
+            self.cbtn.set_visible(self.make_btn, True)
         else:
             self.prev_lab.configure(text="")
         rv_steps = {r.get("step") for r in R.open_reviews(rec)}
@@ -552,25 +550,35 @@ class SamplePage:
     def _show_empty(self):
         self._clear()
         tk.Label(self.body, text="製程紀錄", bg=T.CARD, fg=T.TEXT, font=T.font(14, "bold"), anchor="w").pack(fill="x")
-        tk.Label(self.body, bg=T.CARD, fg=T.MUTED, font=T.font(10), anchor="w", justify="left", wraplength=T.px(520),
+        tk.Label(self.body, bg=T.CARD, fg=T.MUTED, font=T.font(10), anchor="w", justify="left", wraplength=self._wl(),
                  text="每個樣品資料夾（例如 …\\09 TaS2 project\\102）就是一個樣品，裡面的「NN 步驟名稱」子資料夾"
                       "（01 Transfer、05 Lithography…）就是一步一步的照片與資料。\n\n"
                       "1. 左邊「選資料夾」選樣品根目錄\n2. 「📥 從試算表匯入」把試算表的製程紀錄合進來，"
                       "每個樣品建立一個紀錄檔\n3. 對不起來的地方會列在「⚠ 待確認」\n\n"
                       "沒有資料想先看看：按「範例樣品」（合成資料）。").pack(fill="x", pady=(6, 0))
+        self._wrap_body()
+
+    def _wl(self, minus=0):
+        """右欄文字的換行寬度：跟著欄位寬度（欄位窄的時候不會被切掉）。"""
+        try:
+            w = self.sf.canvas.winfo_width()
+        except tk.TclError:
+            w = 0
+        return max(T.px(220), (w if w > 60 else T.px(560)) - T.px(30) - minus)
 
     def _h(self, text, top=14):
         tk.Label(self.body, text=text, bg=T.CARD, fg=T.TEXT, font=T.font(11, "bold"), anchor="w").pack(
             fill="x", pady=(top, 4))
 
-    def _kv(self, parent, rows, wrap=380):
+    def _kv(self, parent, rows, wrap=None):
         g = tk.Frame(parent, bg=parent.cget("bg"))
         g.pack(fill="x")
         for r, (k, v) in enumerate(rows):
             tk.Label(g, text=k, bg=g.cget("bg"), fg=T.MUTED, font=T.font(9), anchor="nw").grid(row=r, column=0,
                                                                                                sticky="nw", pady=1)
             tk.Label(g, text=v, bg=g.cget("bg"), fg=T.TEXT, font=T.font(10, "bold"), anchor="w", justify="left",
-                     wraplength=T.px(wrap)).grid(row=r, column=1, sticky="w", padx=(12, 0), pady=1)
+                     wraplength=T.px(wrap) if wrap else self._wl(T.px(140))).grid(row=r, column=1, sticky="w",
+                                                                                 padx=(12, 0), pady=1)
         return g
 
     def _show_overview(self, s, rec):
@@ -605,24 +613,25 @@ class SamplePage:
             if sh.get("remark"):
                 txt += f"\n備註：{sh['remark']}"
             tk.Label(self.body, text=txt, bg=T.TEXT_BG, fg=T.TEXT, font=T.font(9), anchor="w", justify="left",
-                     wraplength=T.px(520), padx=8, pady=6).pack(fill="x")
+                     wraplength=self._wl(), padx=8, pady=6).pack(fill="x")
         if rec.get("notes"):
             self._h("備註")
             tk.Label(self.body, text=rec["notes"], bg=T.CARD, fg=T.TEXT, font=T.font(10), anchor="w", justify="left",
-                     wraplength=T.px(520)).pack(fill="x")
+                     wraplength=self._wl()).pack(fill="x")
+        self._wrap_body()
 
     def _show_step(self, s, rec, step):
         self._clear()
         kind = step["kind"]
         col = K.color(kind)
-        head = tk.Frame(self.body, bg=T.CARD)
+        head = WrapRow(self.body, bg=T.CARD, padx=8)
         head.pack(fill="x")
-        tk.Label(head, text=K.icon(kind), bg=col, fg="#ffffff", font=T.font(14, "bold"), width=2).pack(side="left")
+        head.add(tk.Label(head, text=K.icon(kind), bg=col, fg="#ffffff", font=T.font(14, "bold"), width=2))
         name = K.label(kind) + (f" #{step.get('n', 1)}" if kind in K.GROUP_KINDS else "")
-        tk.Label(head, text=name, bg=T.CARD, fg=T.TEXT, font=T.font(15, "bold")).pack(side="left", padx=(10, 6))
-        Chip(head, K.CATEGORIES[K.category(kind)][0], fg="#ffffff", bg=col).pack(side="left")
-        ttk.Button(head, text="✎ 編輯這一步", style=f"{KEY}.Small.TButton",
-                   command=lambda: self.open_step_editor(s, rec, step)).pack(side="right")
+        head.add(tk.Label(head, text=name, bg=T.CARD, fg=T.TEXT, font=T.font(15, "bold")))
+        head.add(Chip(head, K.CATEGORIES[K.category(kind)][0], fg="#ffffff", bg=col))
+        head.add(ttk.Button(head, text="✎ 編輯這一步", style=f"{KEY}.Small.TButton",
+                            command=lambda: self.open_step_editor(s, rec, step)), side="right")
         src = step.get("source", [])
         srct = ("手動新增" if "manual" in src else "資料夾＋試算表" if len(src) == 2 else
                 "只有資料夾" if "folder" in src else "只有試算表") + ("（在軟體裡改過）" if step.get("edited") else "")
@@ -636,7 +645,7 @@ class SamplePage:
             ttk.Button(wr, text="✎ 修改", style=f"{KEY}.Small.TButton",
                        command=lambda: self.open_step_editor(s, rec, step)).pack(side="right", padx=4, pady=3)
             tk.Label(wr, text="⚠ " + m, bg="#fffbeb", fg=T.WARNING, font=T.font(9), anchor="w", justify="left",
-                     wraplength=T.px(440), padx=8, pady=4).pack(side="left", fill="x", expand=True)
+                     wraplength=self._wl(T.px(90)), padx=8, pady=4).pack(side="left", fill="x", expand=True)
         if kind in K.GROUP_KINDS or kind == "litho_group":
             self._h("子步驟（可以選填）")
             have = {}
@@ -662,11 +671,12 @@ class SamplePage:
                 data += info["data"]
                 r = tk.Frame(self.body, bg=T.CARD)
                 r.pack(fill="x", pady=1)
-                tk.Label(r, text=fname, bg=T.CARD, fg=T.TEXT, font=T.font(10, "bold")).pack(side="left")
-                tk.Label(r, text=f"　{len(info['images'])} 張照片、{len(info['data'])} 個資料檔", bg=T.CARD, fg=T.MUTED,
-                         font=T.font(9)).pack(side="left")
                 ttk.Button(r, text="📂", width=3, style=f"{KEY}.Small.TButton",
                            command=lambda p=path: open_external(p)).pack(side="right")
+                tk.Label(r, text=fname, bg=T.CARD, fg=T.TEXT, font=T.font(10, "bold")).pack(side="left")
+                fit_label(tk.Label(r, text=f"　{len(info['images'])} 張照片、{len(info['data'])} 個資料檔", bg=T.CARD,
+                                   fg=T.MUTED, font=T.font(9), anchor="w", justify="left")).pack(side="left", fill="x",
+                                                                                                 expand=True)
         if imgs:
             self._h(f"照片（{len(imgs)}）")
             self._thumb_grid(imgs[:MAX_THUMBS])
@@ -679,11 +689,15 @@ class SamplePage:
         if step.get("raw"):
             self._h("試算表原文")
             tk.Label(self.body, text=" → ".join(step["raw"]), bg=T.TEXT_BG, fg=T.TEXT, font=T.font(9), anchor="w",
-                     justify="left", wraplength=T.px(520), padx=8, pady=6).pack(fill="x")
+                     justify="left", wraplength=self._wl(), padx=8, pady=6).pack(fill="x")
         if step.get("notes"):
             self._h("備註")
             tk.Label(self.body, text=step["notes"], bg=T.CARD, fg=T.TEXT, font=T.font(10), anchor="w", justify="left",
-                     wraplength=T.px(520)).pack(fill="x")
+                     wraplength=self._wl()).pack(fill="x")
+        self._wrap_body()
+
+    def _wrap_body(self):
+        auto_wrap(self.body, 14)                            # 長文字跟著欄位寬度換行
 
     def _sub_row(self, k, sub):
         r = tk.Frame(self.body, bg=T.SUBTLE if sub else T.CARD, padx=8, pady=4)
@@ -697,7 +711,7 @@ class SamplePage:
             if sub.get("folders"):
                 txt = (txt + "　" if txt else "") + "📷 " + "、".join(sub["folders"])
             tk.Label(r, text=txt or "（有做，沒有記參數）", bg=r.cget("bg"), fg=T.TEXT if txt else T.MUTED, font=T.font(9),
-                     anchor="w", justify="left", wraplength=T.px(330)).pack(side="left", fill="x", expand=True)
+                     anchor="w", justify="left", wraplength=self._wl(T.px(190))).pack(side="left", fill="x", expand=True)
         else:
             tk.Label(r, text="沒有紀錄（之後可以補填）", bg=r.cget("bg"), fg=T.FAINT, font=T.font(9), anchor="w").pack(
                 side="left")
@@ -706,24 +720,23 @@ class SamplePage:
         for p in paths:
             r = tk.Frame(self.body, bg=T.CARD)
             r.pack(fill="x", pady=1)
-            tk.Label(r, text=os.path.basename(p), bg=T.CARD, fg=T.TEXT, font=T.font(9), anchor="w").pack(
-                side="left", fill="x", expand=True)
             ext = os.path.splitext(p)[1].lower()
+            # 按鈕先放（優先拿到寬度）；檔名跟著寬度換行
             if ext in CAD.CAD_EXT:                          # DXF / GDS：預設 KLayout，另一個按鈕用 AutoCAD
                 first = CAD.default_app(p, self.cfg.get("cad_default"))
-                order = [first] + [a for a in ("klayout", "autocad") if a != first]
-                if ext == ".dwg":
-                    order = ["autocad"]
+                order = ["autocad"] if ext == ".dwg" else [first] + [a for a in ("klayout", "autocad") if a != first]
                 for app in reversed(order):
                     ttk.Button(r, text=f"{CAD.APPS[app]} 開啟" if app == first else CAD.APPS[app],
                                style=f"{KEY}.Small.TButton",
-                               command=lambda p=p, a=app: self.open_cad(p, a)).pack(side="right", padx=(0, 4))
-                continue
-            if ext in (".dat", ".txt", ".csv"):
-                ttk.Button(r, text="在 Magic Tool 開啟", style=f"{KEY}.Small.TButton",
-                           command=lambda p=p: self.app.open_path(p)).pack(side="right")
-            ttk.Button(r, text="開啟", style=f"{KEY}.Small.TButton",
-                       command=lambda p=p: open_external(p)).pack(side="right", padx=(0, 4))
+                               command=lambda p=p, a=app: self.open_cad(p, a)).pack(side="right", padx=(4, 0))
+            else:
+                if ext in (".dat", ".txt", ".csv"):
+                    ttk.Button(r, text="在 Magic Tool 開啟", style=f"{KEY}.Small.TButton",
+                               command=lambda p=p: self.app.open_path(p)).pack(side="right")
+                ttk.Button(r, text="開啟", style=f"{KEY}.Small.TButton",
+                           command=lambda p=p: open_external(p)).pack(side="right", padx=(0, 4))
+            fit_label(tk.Label(r, text=os.path.basename(p), bg=T.CARD, fg=T.TEXT, font=T.font(9), anchor="w",
+                               justify="left")).pack(side="left", fill="x", expand=True)
 
     # ---- 照片縮圖：背景讀檔縮小，主執行緒建立 PhotoImage
     def _thumb_grid(self, items):
@@ -1016,7 +1029,7 @@ class SamplePage:
         from ..core import plotstyle
         plotstyle.apply()
         fr = tk.Frame(self.detail, bg=T.CARD)
-        ctl = tk.Frame(fr, bg=T.CARD)
+        ctl = WrapRow(fr, bg=T.CARD, padx=4)                          # 放不下自動換行
         ctl.pack(side="bottom", fill="x", pady=(6, 0))
         v = {"frame": fr}
         v["first"] = ttk.Button(ctl, text="⏮", width=3, style=f"{KEY}.Small.TButton", command=lambda: self.vis_goto(-1))
@@ -1025,25 +1038,86 @@ class SamplePage:
         v["next"] = ttk.Button(ctl, text="▶", width=3, style=f"{KEY}.Small.TButton", command=lambda: self.vis_step_by(1))
         v["last"] = ttk.Button(ctl, text="⏭", width=3, style=f"{KEY}.Small.TButton", command=lambda: self.vis_goto(None))
         for w in ("first", "prev", "play", "next", "last"):
-            v[w].pack(side="left", padx=(0, 4))
-        v["save"] = ttk.Button(ctl, text="存圖", style=f"{KEY}.Small.TButton", command=self.save_visual)
-        v["save"].pack(side="right")
-        v["auto_cut"] = ttk.Button(ctl, text="↺ 自動", style=f"{KEY}.Small.TButton", command=lambda: self.set_cut(None))
-        v["auto_cut"].pack(side="right", padx=(0, 4))
+            ctl.add(v[w], compact="▶" if w == "play" else None)
         v["cut"] = ttk.Button(ctl, text="✂ 切線", style=f"{KEY}.Small.TButton", command=self.start_cut)
-        v["cut"].pack(side="right", padx=(0, 4))
+        v["auto_cut"] = ttk.Button(ctl, text="↺ 自動", style=f"{KEY}.Small.TButton", command=lambda: self.set_cut(None))
+        v["save"] = ttk.Button(ctl, text="存圖", style=f"{KEY}.Small.TButton", command=self.save_visual)
+        for w, short in (("cut", "✂"), ("auto_cut", "↺"), ("save", "💾")):
+            ctl.add(v[w], side="right", compact=short)
         v["scale"] = tk.Scale(fr, from_=0, to=1, orient="horizontal", showvalue=False, bg=T.CARD, highlightthickness=0,
                               troughcolor=T.CHIP, bd=0, sliderrelief="flat", command=self._on_scale)
         v["scale"].pack(side="bottom", fill="x")
-        v["cap"] = tk.Label(fr, text="", bg=T.CARD, fg=T.TEXT, font=T.font(10, "bold"), anchor="w", justify="left",
-                            wraplength=T.px(520))
+        v["cap"] = fit_label(tk.Label(fr, text="", bg=T.CARD, fg=T.TEXT, font=T.font(10, "bold"), anchor="w",
+                                      justify="left", wraplength=self._wl()))
         v["cap"].pack(side="bottom", fill="x")
+        # 看哪一張：兩張 / 放大剖面 / 放大俯視
+        zr = WrapRow(fr, bg=T.CARD, padx=4)
+        zr.pack(side="top", fill="x", pady=(0, 4))
+        zr.add(tk.Label(zr, text="顯示", bg=T.CARD, fg=T.MUTED, font=T.font(9)))
+        v["zoom"] = {}
+        for mode, txt in (("both", "兩張"), ("section", "放大剖面"), ("top", "放大俯視")):
+            v["zoom"][mode] = zr.add(ttk.Button(zr, text=txt, style=f"{KEY}.Small.TButton",
+                                                command=lambda m=mode: self.set_vis_zoom(m)))
+        # 圖放在可以上下捲動的區塊裡：寬度跟著欄位、高度依內容（螢幕矮的時候往下捲，不會被切掉）
+        v["sf"] = ScrollFrame(fr)
+        v["sf"].pack(fill="both", expand=True)
         v["fig"] = Figure(figsize=(6, 6), dpi=100)
-        v["canvas"] = FigureCanvasTkAgg(v["fig"], master=fr)
-        v["canvas"].get_tk_widget().pack(fill="both", expand=True)
+        v["canvas"] = FigureCanvasTkAgg(v["fig"], master=v["sf"].body)
+        v["canvas"].get_tk_widget().pack(anchor="nw")
         v["canvas"].get_tk_widget().configure(bg="white", highlightthickness=0)
         v["canvas"].mpl_connect("button_press_event", self._on_vis_click)
+        v["w"] = 0
+        from .widgets import keep_figure_fit
+        v["fit"] = keep_figure_fit(v["canvas"])          # 螢幕縮放（125%、150%）時圖不會比畫布大而被切掉
+        v["sf"].canvas.bind("<Configure>", lambda e: self._vis_resize(e.width), add="+")
+        self._mark_zoom(v)
         self.vis = v
+
+    def vis_zoom(self):
+        return self.st.get("vis_zoom", "both")
+
+    def set_vis_zoom(self, mode):
+        """兩張 / 放大剖面 / 放大俯視。"""
+        self.st["vis_zoom"] = mode
+        if self.vis:
+            self._mark_zoom(self.vis)
+            self._vis_draw()
+            self.vis["sf"].canvas.yview_moveto(0)
+        self.app.save_state_soon()
+
+    def _mark_zoom(self, v):
+        for m, b in v["zoom"].items():
+            b.configure(style=f"{KEY}.Accent.TButton" if m == self.vis_zoom() else f"{KEY}.Small.TButton")
+
+    def _vis_size(self, width):
+        """圖的大小（像素）：剖面約寬的 0.45、俯視約寬的 0.6（沒有輪廓檔只留一行字的高度）；
+        放大其中一張時那一張變大、另一張不畫。"""
+        has_top = bool(self.sample and any(not o.get("electrode") for o in self._outlines.get(self.sample["key"], [])))
+        z = self.vis_zoom()
+        if z == "section":
+            return width, max(T.px(320), int(width * 0.8)), (1, 0)
+        if z == "top":
+            return width, (max(T.px(320), int(width * 0.95)) if has_top else T.px(140)), (0, 1)
+        h1 = max(T.px(220), int(width * 0.46))
+        h2 = max(T.px(200), int(width * 0.62)) if has_top else T.px(90)
+        return width, h1 + h2, (h1, h2)
+
+    def _vis_resize(self, width):
+        v = self.vis
+        if not v or width < 50 or abs(width - v["w"]) < 4:
+            return
+        v["w"] = width
+        self._vis_apply_size()
+        self._vis_draw()
+
+    def _vis_apply_size(self):
+        v = self.vis
+        w, h, _ = self._vis_size(max(v["w"], 50))
+        wid = v["canvas"].get_tk_widget()
+        if int(wid.cget("width")) != w or int(wid.cget("height")) != h:
+            wid.configure(width=w, height=h)
+            wid.after_idle(v["fit"])
+            wid.after(200, v["fit"])
 
     def outlines(self, s):
         """digitalize 的輪廓（背景讀，讀完再畫一次）。"""
@@ -1094,12 +1168,24 @@ class SamplePage:
             return
         steps = rec.get("steps", [])
         i = self.vis_step if steps else -1
-        gs = fig.add_gridspec(2, 1, height_ratios=[1.15, 1])
+        if v["w"] > 50:
+            self._vis_apply_size()
+            v["fit"]()
+        _, _, (h1, h2) = self._vis_size(max(v["w"], 400))
+        v["top_ax"] = None
         try:
             outs = self.outlines(self.sample)
-            V.draw_section(fig.add_subplot(gs[0]), rec, i if steps else None, highlight=True, outlines=outs)
-            v["top_ax"] = fig.add_subplot(gs[1])
-            V.draw_top(v["top_ax"], rec, outs, i if steps else None)
+            if h1 and h2:
+                gs = fig.add_gridspec(2, 1, height_ratios=[h1, h2])
+                ax_s, ax_t = fig.add_subplot(gs[0]), fig.add_subplot(gs[1])
+            else:
+                ax_s = fig.add_subplot(111) if h1 else None
+                ax_t = fig.add_subplot(111) if h2 else None
+            if ax_s is not None:
+                V.draw_section(ax_s, rec, i if steps else None, highlight=True, outlines=outs)
+            if ax_t is not None:
+                v["top_ax"] = ax_t
+                V.draw_top(ax_t, rec, outs, i if steps else None)
             fig.tight_layout(pad=0.6)
         except Exception as e:                                   # 示意圖畫不出來不要影響其他功能
             self.app.log(f"示意圖：{e}")
@@ -1118,8 +1204,10 @@ class SamplePage:
         if not any(not o.get("electrode") for o in self.outlines(self.sample)):
             self.app.status("這個樣品沒有 digitalize 的 flake 輪廓檔，剖面是示意版面，不能設定切線", "warn")
             return
+        if self.vis_zoom() == "section":                    # 切線要在俯視圖上點：放大剖面時先切回兩張
+            self.set_vis_zoom("both")
         self._cut_pts = []
-        self.vis["cap"].configure(text="✂ 在下面的俯視圖上點兩下：先點起點 A、再點終點 A'（按「↺ 自動」恢復自動切線）")
+        self.vis["cap"].configure(text="✂ 在俯視圖上點兩下：先點起點 A、再點終點 A'（按「↺ 自動」恢復自動切線）")
 
     def _on_vis_click(self, ev):
         if self._cut_pts is None or ev.inaxes is None or ev.inaxes is not self.vis.get("top_ax") or ev.xdata is None:
@@ -1517,6 +1605,13 @@ class SampleSettings(_Dialog):
         self.title("樣品設定")
         self.configure(bg=T.CARD, padx=16, pady=14)
         self.transient(page.app.root)
+        bf = tk.Frame(self, bg=T.CARD)                           # 按鈕固定在下面；內容多的時候上面可以捲動
+        bf.pack(side="bottom", fill="x", pady=(10, 0))
+        ttk.Button(bf, text="取消", style=f"{KEY}.Ghost.TButton", command=self.destroy).pack(side="right")
+        ttk.Button(bf, text="儲存", style=f"{KEY}.Accent.TButton", command=self.save).pack(side="right", padx=(0, 6))
+        self.sf = ScrollFrame(self)
+        self.sf.pack(fill="both", expand=True)
+        g = self.sf.body
         c = sample_settings(page.app.settings)
         self.vars = {k: tk.StringVar(value=str(c.get(k, ""))) for k in ("user", "root", "record_name", "sheet",
                                                                         "service_account", "sheet_script_url",
@@ -1537,42 +1632,42 @@ class SampleSettings(_Dialog):
                 ("KLayout 位置", "klayout_path", "空白 = 自動找（Windows：…\\KLayout\\klayout_app.exe）"),
                 ("AutoCAD 位置", "autocad_path", "空白 = 自動找（C:\\Program Files\\Autodesk\\AutoCAD 20xx\\acad.exe）")]
         for r, (lab, key, hint) in enumerate(rows):
-            tk.Label(self, text=lab, bg=T.CARD, fg=T.TEXT, font=T.font(10, "bold")).grid(row=2 * r, column=0, sticky="w",
+            tk.Label(g, text=lab, bg=T.CARD, fg=T.TEXT, font=T.font(10, "bold")).grid(row=2 * r, column=0, sticky="w",
                                                                                        pady=(6, 0))
-            ttk.Entry(self, textvariable=self.vars[key], width=58).grid(row=2 * r, column=1, sticky="we", pady=(6, 0))
+            ttk.Entry(g, textvariable=self.vars[key], width=58).grid(row=2 * r, column=1, sticky="we", pady=(6, 0))
             if key == "root":
-                ttk.Button(self, text="選…", style=f"{KEY}.Small.TButton", command=self._pick_root).grid(
+                ttk.Button(g, text="選…", style=f"{KEY}.Small.TButton", command=self._pick_root).grid(
                     row=2 * r, column=2, padx=(4, 0), pady=(6, 0))
             if key in ("sheet", "service_account", "klayout_path", "autocad_path"):
-                ttk.Button(self, text="選…", style=f"{KEY}.Small.TButton",
+                ttk.Button(g, text="選…", style=f"{KEY}.Small.TButton",
                            command=lambda k=key: self._pick_file(k)).grid(row=2 * r, column=2, padx=(4, 0), pady=(6, 0))
-            tk.Label(self, text=hint, bg=T.CARD, fg=T.MUTED, font=T.font(8)).grid(row=2 * r + 1, column=1, sticky="w")
+            tk.Label(g, text=hint, bg=T.CARD, fg=T.MUTED, font=T.font(8)).grid(row=2 * r + 1, column=1, sticky="w")
         r = 2 * len(rows)
-        tk.Label(self, text="資料夾命名規則", bg=T.CARD, fg=T.TEXT, font=T.font(10, "bold")).grid(row=r, column=0,
+        tk.Label(g, text="資料夾命名規則", bg=T.CARD, fg=T.TEXT, font=T.font(10, "bold")).grid(row=r, column=0,
                                                                                            sticky="w", pady=(6, 0))
-        cb = ttk.Combobox(self, textvariable=self.rule_choice, state="readonly", width=40,
+        cb = ttk.Combobox(g, textvariable=self.rule_choice, state="readonly", width=40,
                           values=[n for n, _ in F.RULE_PRESETS] + ["自訂（正規表示式）"])
         cb.grid(row=r, column=1, sticky="w", pady=(6, 0))
         cb.bind("<<ComboboxSelected>>", lambda e: self._preset())
-        ttk.Entry(self, textvariable=self.rule_var, width=58).grid(row=r + 1, column=1, sticky="we")
-        tk.Label(self, text="自訂：第一組 = 編號、第二組 = 名稱（或用 (?P<no>…)、(?P<name>…)）", bg=T.CARD, fg=T.MUTED,
+        ttk.Entry(g, textvariable=self.rule_var, width=58).grid(row=r + 1, column=1, sticky="we")
+        tk.Label(g, text="自訂：第一組 = 編號、第二組 = 名稱（或用 (?P<no>…)、(?P<name>…)）", bg=T.CARD, fg=T.MUTED,
                  font=T.font(8)).grid(row=r + 2, column=1, sticky="w")
-        sf = tk.Frame(self, bg=T.CARD)
+        sf = tk.Frame(g, bg=T.CARD)
         sf.grid(row=r + 3, column=1, columnspan=2, sticky="w", pady=(10, 0))
         ttk.Checkbutton(sf, text="自動更新試算表（新增 / 修改步驟、狀態、結果時寫進試算表）", variable=self.sync,
                         style=f"{KEY}.TCheckbutton").pack(side="left")
         ttk.Button(sf, text="📋 複製 Apps Script 程式碼", style=f"{KEY}.Small.TButton", command=self._copy_script).pack(
             side="left", padx=(8, 0))
-        cf = tk.Frame(self, bg=T.CARD)
+        cf = tk.Frame(g, bg=T.CARD)
         cf.grid(row=r + 6, column=1, columnspan=2, sticky="w", pady=(6, 0))
         tk.Label(cf, text="DXF / GDS 預設用", bg=T.CARD, fg=T.TEXT, font=T.font(10)).pack(side="left")
         ttk.Combobox(cf, textvariable=self.cad, values=["KLayout", "AutoCAD"], state="readonly", width=10).pack(
             side="left", padx=(6, 0))
         tk.Label(cf, text="（另一個程式的按鈕也會一直在旁邊；DWG 一律用 AutoCAD）", bg=T.CARD, fg=T.MUTED, font=T.font(8)).pack(
             side="left", padx=(6, 0))
-        self.msg = tk.Label(self, text="", bg=T.CARD, fg=T.MUTED, font=T.font(8), anchor="w")
+        self.msg = tk.Label(g, text="", bg=T.CARD, fg=T.MUTED, font=T.font(8), anchor="w")
         self.msg.grid(row=r + 4, column=1, columnspan=2, sticky="w")
-        bf = tk.Frame(self, bg=T.CARD)
+        bf = tk.Frame(g, bg=T.CARD)
         bf.grid(row=r + 7, column=0, columnspan=3, sticky="e", pady=(14, 0))
         ttk.Button(bf, text="取消", style=f"{KEY}.Ghost.TButton", command=self.destroy).pack(side="right")
         ttk.Button(bf, text="儲存", style=f"{KEY}.Accent.TButton", command=self.save).pack(side="right", padx=(0, 6))
@@ -1654,6 +1749,7 @@ class ImportDialog(_Dialog):
         self.go = ttk.Button(bf, text="建立紀錄檔", style=f"{KEY}.Accent.TButton", command=self.create)
         self.go.pack(side="right", padx=(0, 6))
         self.go.state(["disabled"])
+        fit_to_content(self, 0, T.px(120))
 
     def _pick(self):
         p = filedialog.askopenfilename(parent=self, filetypes=[("試算表", "*.xlsx *.csv *.tsv"), ("全部", "*.*")])
@@ -1734,7 +1830,7 @@ class ReviewDialog(_Dialog):
         self.title("待確認")
         self.configure(bg=T.CARD, padx=12, pady=12)
         self.transient(page.app.root)
-        self.geometry(f"{T.px(860)}x{T.px(520)}")
+        fit_window(self, T.px(860), T.px(520), T.px(520), T.px(300))
         self.head = tk.Label(self, text="", bg=T.CARD, fg=T.TEXT, font=T.font(12, "bold"), anchor="w")
         self.head.pack(fill="x")
         tk.Label(self, text="雙擊一列跳到那個樣品；沒問題就按「已確認」；種類推錯、參數要補 → 「✎ 修改這一步」（改完自動算已確認）。",
