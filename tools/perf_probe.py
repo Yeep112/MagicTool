@@ -47,9 +47,9 @@ def main():
             time.sleep(0.005)
         return False
 
-    pump(lambda: len(app.pages) == len(INSTRUMENTS), 15)
+    pump(lambda: all(k in app.pages for k in [*INSTRUMENTS, "Samples"]), 15)
     app.open_demo()
-    pump(lambda: all(p.data.files for p in app.pages.values() if p.inst.source == "files"), 15)
+    pump(lambda: all(p.data.files for p in app.pages.values() if getattr(p, "inst", None) and p.inst.source == "files"), 15)
     pump(lambda: app.pages["Etching"].data.df is not None, 10)
     for key in INSTRUMENTS:                      # 每台畫一張圖（和自我測試一樣）
         app.segment.select(key)

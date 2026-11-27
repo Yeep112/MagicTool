@@ -197,6 +197,42 @@ class Segmented(tk.Frame):
                 s.configure(fg=self._sub_off)
 
 
+class NavBar(Segmented):
+    """上方切換列，分組顯示：groups = [(組名, [(key, 標題, 副標), …]), …]。
+    用法和 Segmented 一樣（select(key)、buttons、active），只是每組上面有一個小標題（製程 / 量測）。"""
+
+    def __init__(self, parent, groups, command, bg=None):
+        bg = bg or T.CHIP
+        tk.Frame.__init__(self, parent, bg=bg, padx=3, pady=2)
+        self.command = command
+        self.buttons = []
+        self.active = 0
+        self._bg = bg
+        self._fg_off = T.HEADER_MUTED if bg == T.HEADER_2 else T.MUTED
+        self._sub_off = "#6f80a8" if bg == T.HEADER_2 else T.FAINT
+        col = 0
+        for gi, (gname, options) in enumerate(groups):
+            if gi:
+                tk.Frame(self, bg=self._sub_off, width=1).grid(row=0, column=col, rowspan=2, sticky="ns", padx=8, pady=4)
+                col += 1
+            tk.Label(self, text=gname, bg=bg, fg=self._sub_off, font=T.font(8, "bold"), anchor="w").grid(
+                row=0, column=col, columnspan=len(options), sticky="w", padx=(6, 0))
+            for key, title, sub in options:
+                i = len(self.buttons)
+                b = tk.Frame(self, bg=bg, cursor="hand2", padx=12, pady=4)
+                t = tk.Label(b, text=title, bg=bg, fg=self._fg_off, font=T.font(11, "bold"), cursor="hand2")
+                s_ = tk.Label(b, text=sub, bg=bg, fg=self._sub_off, font=T.font(8), cursor="hand2")
+                t.pack(anchor="w")
+                s_.pack(anchor="w")
+                b.grid(row=1, column=col, sticky="nsew", padx=1)
+                self.columnconfigure(col, weight=1, uniform="seg")
+                for w in (b, t, s_):
+                    w.bind("<Button-1>", lambda e, i=i: self.select(i))
+                self.buttons.append((key, b, t, s_))
+                col += 1
+        self.paint()
+
+
 class FeatureList(tk.Frame):
     """依「快速檢視 / 參數萃取 / 批次比較」分組列出分析功能。"""
 

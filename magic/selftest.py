@@ -763,6 +763,7 @@ def run_gui(rep, timeout=90):
     from .gui.app import App, prepare
     from .gui import theme as _T0
     from .core.registry import INSTRUMENTS
+    ALL_KEYS = [*INSTRUMENTS, "Samples"]
     stats = {}
 
     def go():
@@ -790,9 +791,9 @@ def run_gui(rep, timeout=90):
                 time.sleep(0.005)
             return False
 
-        pump(lambda: len(app.pages) == len(INSTRUMENTS), 15)
+        pump(lambda: all(k in app.pages for k in ALL_KEYS), 15)
         app.open_demo()
-        pump(lambda: all(p.data.files for k, p in app.pages.items() if p.inst.source == "files"), 15)
+        pump(lambda: all(p.data.files for k, p in app.pages.items() if getattr(p, "inst", None) and p.inst.source == "files"), 15)
         pump(lambda: app.pages["Etching"].data.df is not None, 10)
         switch_ms, results = [], []
         for key in INSTRUMENTS:
@@ -822,7 +823,7 @@ def run_gui(rep, timeout=90):
         gaps.clear()
         t0 = time.perf_counter()
         for _ in range(3):
-            for key in INSTRUMENTS:
+            for key in ALL_KEYS:
                 t1 = time.perf_counter()
                 app.segment.select(key)
                 root.update()                       # 包含重新排版與畫面更新的時間
@@ -832,7 +833,7 @@ def run_gui(rep, timeout=90):
         def count(w):
             return 1 + sum(count(c) for c in w.winfo_children() if c.winfo_manager())
         panes = {}
-        for key in INSTRUMENTS:
+        for key in ALL_KEYS:
             app.segment.select(key)
             root.update()
             cells = []
@@ -850,7 +851,7 @@ def run_gui(rep, timeout=90):
         stats["panes"] = panes
         stats["screen"] = f"{root.winfo_width()}×{root.winfo_height()}，介面縮放 {getattr(_T0, 'UI_FACTOR', 1):g}"
         # 四頁疊在一起：切換後滑鼠指到的地方，一定要是這一頁的元件（不能被別頁蓋住）
-        for key in INSTRUMENTS:
+        for key in ALL_KEYS:
             app.segment.select(key)
             root.update()
             for f in app.pages[key].frames():
@@ -949,6 +950,7 @@ def run_gui(rep, timeout=90):
         assert last_row["Material"] == "hBN" and abs(last_row["Line width (nm)"] - 200) < 1e-9, last_row
         stats["anim_gap"] = max(frame)
         _gui_03(app, root, pump, ep)
+        _gui_samples(app, root, pump)
         stats.update(results=results, switch_ms=switch_ms, switch_total=switch_total, bg_gaps=bg_gaps,
                      timings=list(app.timings), fixed_ok=fixed_ok)
         app.close()
@@ -996,6 +998,98 @@ class _Ev:
     def __init__(self, x, y, button=1):
         self.x, self.y, self.button = x, y, button
         self.inaxes = self.xdata = self.ydata = None
+
+
+def _texts(w):
+    out = []
+    try:
+        t = w.cget("text")
+        if t:
+            out.append(str(t))
+    except Exception:
+        pass
+    for c in w.winfo_children():
+        out += _texts(c)
+    return out
+
+
+def _gui_samples(app, root, pump):
+    """v0.6 製程 → 樣品頁：找樣品資料夾、從試算表匯入、時間軸、步驟細節、照片縮圖、待確認、篩選。"""
+    from .fab import records as FR
+    from .gui import samples_page as SP
+    from .testdata import write_samples
+    p = write_samples(tempfile.mkdtemp(prefix="magic_fab_"))
+    pg = app.page("Samples")
+    app.segment.select("Samples")
+    root.update()
+    assert app.current is pg and app.segment.buttons[app.segment.active][0] == "Samples", "切不到樣品頁"
+    pg.save_cfg(root=p["root"], sheet="", user="tester")
+    assert pump(lambda: not pg.scanning and pg.lib is not None and pg.lib.root == p["root"], 20), "掃描樣品資料夾沒有完成"
+    assert {s["label"] for s in pg.lib.samples} == {"901", "902", "904", "al 906", "907", "909"}, \
+        [s["label"] for s in pg.lib.samples]
+    # 讀試算表（和匯入對話框同一條路）
+    dlg = SP.ImportDialog(pg)
+    dlg.src.set(p["sheet"])
+    dlg.read()
+    assert pump(lambda: dlg.go.instate(["!disabled"]), 20), f"讀試算表失敗：{dlg.info.cget('text')}"
+    assert "試算表 8 個樣品" in dlg.info.cget("text") and "會建立：資料夾裡 6 個紀錄檔、這台電腦 3 個" in dlg.info.cget("text"), \
+        dlg.info.cget("text")
+    assert len(pg.tree.get_children()) == 9
+    assert "abandoned" in pg.tree.item(pg.find("903")["key"], "tags"), "放棄的樣品要變灰"
+    # 選 901 → 時間軸（還沒建立紀錄檔：初版預覽）
+    pg.tree.selection_set(pg.find("901")["key"])
+    root.update()
+    assert pg.sample["label"] == "901" and len(pg.tl.get_children()) == 15, len(pg.tl.get_children())
+    assert "還沒有紀錄檔" in pg.prev_lab.cget("text")
+    assert "低溫電阻 1500 Ω" in pg.s_res.cget("text") and "超導 contact" in pg.s_res.cget("text")
+    rec = pg.record()
+    sid = next(s["id"] for s in rec["steps"] if s["folders"] == ["05 Lithography", "06 Lift Off"])
+    pg.select_step(sid)
+    root.update()
+    txt = "\n".join(_texts(pg.body))
+    for want in ("Contact #1", "子步驟", "微影（顯影後）", "RIE", "OE（多蝕刻）", "Cr 10 nm / Au 70 nm", "05 Lithography",
+                 "照片（3）"):
+        assert want in txt, f"步驟細節少了「{want}」"
+    assert pump(lambda: len(pg._imgs) >= 3, 10), "照片縮圖沒有出現"
+    # 建立紀錄檔
+    dlg.create()
+    assert pump(lambda: os.path.isfile(FR.record_path(p["901"])), 15), "沒有建立紀錄檔"
+    assert pump(lambda: pg.find("901").get("rec") is not None, 5)
+    pg._show_sample(pg.find("901"))
+    assert pg.prev_lab.cget("text") == ""
+    dlg.destroy()
+    # 待確認：已確認寫回紀錄檔
+    rd = SP.ReviewDialog(pg)
+    n0 = len(rd.items)
+    assert n0 >= 5, n0
+    first = next(iter(rd.items))
+    s0, r0 = rd.items[first]
+    rd.tree.selection_set(first)
+    rd.jump()
+    root.update()
+    assert pg.sample["key"] == s0["key"]
+    rd.resolve()
+    assert len(rd.items) == n0 - 1
+    saved = FR.load(s0["path"])
+    assert any(r["id"] == r0["id"] and r["resolved"] for r in saved["review"]), "已確認沒有寫進紀錄檔"
+    rd.destroy()
+    # 篩選：狀態、文字
+    pg.state_var.set("放棄")
+    pg.refresh_list()
+    assert {pg.tree.set(i, "label").rstrip(" ·") for i in pg.tree.get_children()} == {"903", "905"}
+    pg.state_var.set("全部")
+    pg.filter_var.set("al")
+    pg.refresh_list()
+    assert [pg.tree.set(i, "label") for i in pg.tree.get_children()] == ["al 906"]
+    pg.filter_var.set("")
+    # 只有資料夾的樣品、設定視窗
+    pg.tree.selection_set(pg.find("909")["key"])
+    root.update()
+    assert any("推測" in m for m in pg.rv_list.get(0, "end")), "只有資料夾的微影組要列成待確認"
+    sd = SP.SampleSettings(pg)
+    root.update()
+    sd.destroy()
+    pg.save_cfg(root="", sheet="", user="")
 
 
 def _gui_03(app, root, pump, ep):
@@ -1314,7 +1408,7 @@ def _gui_03(app, root, pump, ep):
         cur.toggle_style()
         root.update()
         assert cur.style_bar.winfo_ismapped() and app.view["style_open"]
-        other = next(k for k in app.pages if app.pages[k] is not app.current)
+        other = next(k for k in app.pages if k != "Samples" and app.pages[k] is not app.current)
         app.segment.select(other)
         root.update()
         assert app.pages[other].right.style_bar.winfo_ismapped(), "切到別台時樣式列沒有跟著打開"

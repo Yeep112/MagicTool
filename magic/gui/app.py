@@ -32,7 +32,10 @@ from ..core import settings as S
 from ..core.registry import INSTRUMENTS, LOAD_ERRORS, load_analyses
 from . import theme as T
 from .page import Page
-from .widgets import Paned, Segmented, card
+from .samples_page import COLOR as SAMPLES_COLOR
+from .samples_page import KEY as SAMPLES
+from .samples_page import SamplePage
+from .widgets import NavBar, Paned, card
 
 VIEW_DEFAULTS = dict(size_mode="填滿視窗", fig_w=1100, fig_h=650, grid=True, font="中",
                      xlabel=12, ylabel=12, cbar=12, ticks=10, legend=8, title=11, suptitle=15,
@@ -66,8 +69,9 @@ class App:
         self._log_lock = threading.Lock()
 
         T.set_accents(INSTRUMENTS)
+        T.ACCENTS[SAMPLES] = {**T.shades(SAMPLES_COLOR), "on": "#ffffff"}
         self.style = ttk.Style(root)
-        T.setup_all(self.style, list(INSTRUMENTS))
+        T.setup_all(self.style, list(INSTRUMENTS) + [SAMPLES])
         root.title(f"Magic Tool 實驗分析　v{__version__}")
         try:
             sw, sh = int(root.winfo_screenwidth()), int(root.winfo_screenheight())
@@ -77,7 +81,8 @@ class App:
         root.minsize(1100, 680)
         root.configure(bg=T.BG)
         self._build()
-        key = self.state.get("instrument") if self.state.get("instrument") in INSTRUMENTS else next(iter(INSTRUMENTS))
+        keys = [SAMPLES] + list(INSTRUMENTS)
+        key = self.state.get("instrument") if self.state.get("instrument") in keys else next(iter(INSTRUMENTS))
         self.switch(key)
         root.after(40, self._poll)
         root.after(400, self._prebuild)
@@ -90,6 +95,8 @@ class App:
         for i, k in enumerate(INSTRUMENTS, 1):
             for mod in mods:
                 root.bind(f"<{mod}-Key-{i}>", lambda e, k=k: self.segment.select(k))
+        for mod in mods:
+            root.bind(f"<{mod}-Key-0>", lambda e: self.segment.select(SAMPLES))      # Ctrl+0 = 樣品
         if LOAD_ERRORS:
             root.after(800, self._show_load_errors)
         if open_path:
@@ -117,8 +124,10 @@ class App:
         tt.pack(side="left")
         tk.Label(tt, text="Magic Tool", bg=T.HEADER, fg=T.HEADER_TEXT, font=T.font(15, "bold")).pack(anchor="w")
         tk.Label(tt, text=f"實驗分析　v{__version__}", bg=T.HEADER, fg=T.HEADER_MUTED, font=T.font(9)).pack(anchor="w")
-        opts = [(k, i.title, i.sub) for k, i in INSTRUMENTS.items()]
-        self.segment = Segmented(h, opts, self.switch, bg=T.HEADER_2)
+        inst = {k: (k, i.title, i.sub) for k, i in INSTRUMENTS.items()}
+        fab = [(SAMPLES, "樣品", "製程紀錄")] + [inst[k] for k in INSTRUMENTS if INSTRUMENTS[k].source == "records"]
+        meas = [inst[k] for k in INSTRUMENTS if INSTRUMENTS[k].source != "records"]
+        self.segment = NavBar(h, [("製程", fab), ("量測", meas)], self.switch, bg=T.HEADER_2)
         self.segment.pack(side="left", padx=10, pady=8)
         ttk.Button(h, text="⚙ 設定", style="Header.TButton", command=self.open_settings).pack(side="right", padx=(6, 14))
         ttk.Button(h, text="📂 輸出資料夾", style="Header.TButton",
@@ -163,7 +172,7 @@ class App:
     def page(self, key):
         p = self.pages.get(key)
         if p is None:
-            p = Page(self, INSTRUMENTS[key], self.analyses.get(key, []))
+            p = SamplePage(self) if key == SAMPLES else Page(self, INSTRUMENTS[key], self.analyses.get(key, []))
             self.pages[key] = p
             # （試過四頁疊在一起用 tkraise 切換：Windows 會連被蓋住的頁面一起重畫，反而慢一倍，所以不用）
             for f in p.frames():
@@ -200,7 +209,7 @@ class App:
         """啟動後在空檔把其他機台的頁面先建好，之後切換不用等。"""
         if self.dead:
             return
-        for key in INSTRUMENTS:
+        for key in list(INSTRUMENTS) + [SAMPLES]:
             if key not in self.pages:
                 self.page(key)
                 self.root.after(120, self._prebuild)
@@ -328,6 +337,8 @@ class App:
         self.settings = new
         S.save_settings(new)
         for key, p in self.pages.items():
+            if not hasattr(p, "inst"):                      # 樣品頁
+                continue
             if p.inst.source == "records":
                 p.data.reload()
             elif not p.data.folder and new.get("folders", {}).get(key) and os.path.isdir(new["folders"][key]):
@@ -359,7 +370,8 @@ class App:
                 fp = os.path.join(path, n)
                 if os.path.isfile(fp):
                     kinds.append(detect(fp))
-            key = max(("PPMS", "SQUID", "Raman"), key=kinds.count) if kinds else (self.current.key if self.current else "PPMS")
+            cur = self.current.key if self.current and self.current.key in ("PPMS", "SQUID", "Raman") else "PPMS"
+            key = max(("PPMS", "SQUID", "Raman"), key=kinds.count) if kinds else cur
             self.segment.select(key)
             self.pages[key].data.set_folder(path)
             return
@@ -368,7 +380,8 @@ class App:
                 self.segment.select("Etching")
                 return
             kind = detect(path)
-            key = kind if kind in INSTRUMENTS else ("PPMS" if kind == "QD" else self.current.key)
+            cur = self.current.key if self.current and self.current.key in ("PPMS", "SQUID", "Raman") else "PPMS"
+            key = kind if kind in INSTRUMENTS and INSTRUMENTS[kind].source == "files" else ("PPMS" if kind == "QD" else cur)
             self.segment.select(key)
             self.pages[key].data.set_folder(os.path.dirname(path), select=[path])
 
