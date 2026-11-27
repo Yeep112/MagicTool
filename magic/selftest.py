@@ -793,7 +793,7 @@ def run_gui(rep, timeout=90):
 
         pump(lambda: all(k in app.pages for k in ALL_KEYS), 15)
         app.open_demo()
-        pump(lambda: all(p.data.files for k, p in app.pages.items() if p.inst.source == "files"), 15)
+        pump(lambda: all(p.data.files for k, p in app.pages.items() if getattr(p, "inst", None) and p.inst.source == "files"), 15)
         pump(lambda: app.pages["Etching"].data.df is not None, 10)
         switch_ms, results = [], []
         for key in INSTRUMENTS:
