@@ -97,6 +97,7 @@ class SamplePage:
         self._scan_gen = 0
         self.scanning = False
         self._scan_listeners = []
+        self.ppt_drafts = {}
         import threading
         self._sync_lock = threading.Lock()
         self.cfg = sample_settings(app.settings)
@@ -123,7 +124,8 @@ class SamplePage:
             return self.save_visual()
         self.app.status("先選一個樣品", "warn")
 
-    export = save_figure
+    def export(self):
+        return self.open_export()
 
     # ================================================================== 版面
     def _build(self):
@@ -207,6 +209,8 @@ class SamplePage:
         cbtn.pack(fill="x", pady=(8, 0))
         self.open_btn = ttk.Button(cbtn, text="📂 開啟樣品資料夾", style=f"{KEY}.Small.TButton", command=self.open_sample_dir)
         self.open_btn.pack(side="left")
+        self.ppt_btn = ttk.Button(cbtn, text="📤 匯出 PPT", style=f"{KEY}.Small.TButton", command=self.open_export)
+        self.ppt_btn.pack(side="left", padx=(6, 0))
         self.make_btn = ttk.Button(cbtn, text="建立紀錄檔", style=f"{KEY}.Small.TButton", command=self.create_record)
         self.res_btn = ttk.Button(cbtn, text="✎ 結果", style=f"{KEY}.Small.TButton", command=self.open_results)
         self.res_btn.pack(side="right")
@@ -397,7 +401,7 @@ class SamplePage:
         self.rv_list.delete(0, "end")
         self.make_btn.pack_forget()
         on = ["!disabled"] if s is not None else ["disabled"]
-        for b in [self.hold_btn, self.ab_btn, self.res_btn] + self.tl_btns:
+        for b in [self.hold_btn, self.ab_btn, self.res_btn, self.ppt_btn] + self.tl_btns:
             b.state(on)
         if s is None:
             self.s_title.configure(text="選一個樣品")
@@ -1271,6 +1275,52 @@ class SamplePage:
 
     def open_sync(self):
         return SE.SyncDialog(self)
+
+    # ================================================================== v0.9：PPT
+    def open_export(self):
+        if not self.lib or not self.lib.samples:
+            self.app.status("還沒有樣品", "warn")
+            return None
+        return SE.ExportDialog(self)
+
+    def save_template(self, s, tpl):
+        """PPT 模板存進紀錄檔（不會寫試算表）。"""
+        rec = copy.deepcopy(self.lib.preview(s))
+        rec["ppt"] = {k: tpl.get(k) for k in ("title", "subtitle", "include", "skip_steps", "step_notes")}
+        try:
+            R.save(rec, s["path"])
+        except OSError as e:
+            self.app.status(f"模板存不進紀錄檔：{e}", "error")
+            return False
+        s["rec"] = rec
+        s.pop("rec_preview", None)
+        return True
+
+    def export_ppt(self, samples, path, lang="zh", sections=None, done=None):
+        from ..fab import report_ppt as RP
+        from ..fab import visual as V
+        items = [{"rec": copy.deepcopy(self.lib.preview(x)), "dir": x.get("dir") or ""} for x in samples]
+
+        def work():
+            err, n = None, 0
+            try:
+                for it in items:
+                    it["outlines"] = V.find_outlines(it["dir"]) if it["dir"] else []
+                _, n = RP.export(items, path, lang, sections)
+            except Exception as e:
+                import traceback
+                self.app.log(traceback.format_exc())
+                err = str(e)
+            self.app.post(("call", lambda: self._exported(path, n, err, done)))
+        self.app.submit(work)
+
+    def _exported(self, path, n, err, done=None):
+        if err:
+            self.app.status(f"匯出 PPT 失敗：{err}", "error")
+        else:
+            self.app.status(f"已匯出 PPT（{n} 頁）：{path}", "ok", open_path=path)
+        if done:
+            done(path, n, err)
 
 
 class SampleSettings(_Dialog):

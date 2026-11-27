@@ -1181,7 +1181,57 @@ def _gui_samples(app, root, pump):
     sd.destroy()
     _gui_samples_edit(app, root, pump, pg, p)
     _gui_samples_visual(app, root, pump, pg, p)
+    _gui_samples_ppt(app, root, pump, pg, p)
     pg.save_cfg(root="", sheet="", user="", sheet_sync=False)
+
+
+def _gui_samples_ppt(app, root, pump, pg, p):
+    """v0.9：匯出 PPT（單一樣品、多樣品比較）、模板（標題、關掉一步、給教授的說明）存進紀錄檔。"""
+    import re
+    import zipfile
+    from .fab import records as FR
+    s = pg.find("901")
+    pg.refresh_list(select=s["key"])
+    root.update()
+    dlg = pg.open_export()
+    root.update()
+    assert dlg.selected() == [s] and len(dlg.steps.get_children()) == len(pg.record()["steps"])
+    first = dlg.steps.get_children()[0]
+    if dlg.steps.set(first, "on") == "—":
+        dlg.toggle(first)
+    dlg.toggle(first)
+    assert dlg.steps.set(first, "on") == "—"
+    sid = dlg.steps.get_children()[5]
+    dlg.steps.selection_set(sid)
+    root.update()
+    dlg.note.insert("1.0", "給教授：這一步重做過一次")
+    dlg._note_changed()
+    dlg.t_title.set("901 製程報告（selftest）")
+    out = os.path.join(tempfile.mkdtemp(), "901.pptx")
+    dlg.export(out)
+    assert pump(lambda: "已匯出" in dlg.info.cget("text") or "失敗" in dlg.info.cget("text"), 60), dlg.info.cget("text")
+    assert "已匯出" in dlg.info.cget("text"), dlg.info.cget("text")
+    with zipfile.ZipFile(out) as z:
+        xml = " ".join(z.read(n).decode("utf-8") for n in z.namelist() if re.fullmatch(r"ppt/slides/slide\d+\.xml", n))
+    assert "901 製程報告（selftest）" in xml and "給教授：這一步重做過一次" in xml
+    tpl = FR.load(s["path"])["ppt"]
+    assert first in tpl["skip_steps"] and tpl["step_notes"][sid].startswith("給教授") and tpl["title"].endswith("（selftest）")
+    # 多樣品比較、中英並列
+    dlg.slist.selection_clear(0, "end")
+    for lab in ("901", "904"):
+        dlg.slist.selection_set(dlg.samples.index(pg.find(lab)))
+    dlg._load_tpl()
+    dlg.lang.set("both")
+    out2 = os.path.join(tempfile.mkdtemp(), "cmp.pptx")
+    dlg.info.configure(text="")
+    dlg.export(out2)
+    assert pump(lambda: "已匯出" in dlg.info.cget("text") or "失敗" in dlg.info.cget("text"), 60), dlg.info.cget("text")
+    assert "已匯出" in dlg.info.cget("text") and os.path.getsize(out2) > 20000, dlg.info.cget("text")
+    with zipfile.ZipFile(out2) as z:
+        xml = z.read("ppt/slides/slide2.xml").decode("utf-8")
+    assert "樣品比較" in xml and "Sample comparison" in xml
+    dlg.destroy()
+    pg.st["ppt_lang"] = "zh"
 
 
 def _gui_samples_visual(app, root, pump, pg, p):

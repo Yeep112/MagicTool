@@ -343,9 +343,12 @@ def draw_section(ax, rec, upto=None, lang="zh", title=True, highlight=True):
         ax.spines[sp].set_visible(False)
     ax.axhline(0, color="#94a3b8", lw=0.5)
     if title:
-        name = sec.notes[-1] if sec.notes else ("（還沒有步驟）" if lang == "zh" else "(no steps)")
-        lab = "剖面　做完：" if lang == "zh" else "Cross-section after: "
-        ax.set_title(lab + name, fontsize=9, loc="left")
+        if upto is None:
+            ax.set_title("剖面（全部步驟）" if lang == "zh" else "Cross-section (all steps)", fontsize=9, loc="left")
+        else:
+            name = sec.notes[-1] if sec.notes else ("（還沒有步驟）" if lang == "zh" else "(no steps)")
+            lab = "剖面　做完：" if lang == "zh" else "Cross-section after: "
+            ax.set_title(lab + name, fontsize=9, loc="left")
     return sec
 
 
