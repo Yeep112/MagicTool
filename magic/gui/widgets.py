@@ -232,6 +232,12 @@ class WrapRow(tk.Frame):
 
         def configure(cnf=None, **kw):
             text = kw.get("text", cnf.get("text") if isinstance(cnf, dict) else None)
+            if text is not None:
+                try:
+                    if str(text) == str(w.cget("text")):     # 文字沒變（常常重設同樣的字）→ 不用重排
+                        text = None
+                except (tk.TclError, IndexError, TypeError):
+                    pass
             comp = getattr(row, "_compact", {})
             if text is not None and not getattr(row, "_internal", False) and w in comp:
                 comp[w] = (str(text), comp[w][1])
@@ -260,8 +266,7 @@ class WrapRow(tk.Frame):
                 self._job = None
 
     def _refresh(self):
-        self._job = None
-        self._plan = None
+        self._job = None                                    # 分行沒變就不重新擺放（文字變長變短 pack 自己會調整）
         try:
             self._relayout()
         except tk.TclError:
@@ -432,8 +437,15 @@ def fit_label(label, pad=2):
     orig = label.configure
 
     def configure(cnf=None, **kw):
+        text = kw.get("text", cnf.get("text") if isinstance(cnf, dict) else None)
+        changed = False
+        if text is not None:
+            try:
+                changed = str(text) != str(label.cget("text"))
+            except tk.TclError:
+                changed = True
         r = orig(cnf, **kw)
-        if "text" in kw or (isinstance(cnf, dict) and "text" in cnf):
+        if changed:
             def later():
                 try:
                     if label.winfo_exists() and label.winfo_ismapped():
