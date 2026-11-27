@@ -42,10 +42,59 @@ VIEW_DEFAULTS = dict(size_mode="填滿視窗", fig_w=1100, fig_h=650, grid=True,
                      suptitle_bold=True, fig_title="", style_open=False)
 
 
+# ---------------------------------------------------------------------------
+# tkinter 的 StringVar 等變數如果在背景執行緒被回收（Python 的循環回收剛好在背景執行緒跑），
+# 回收時會呼叫 Tcl：沒有在跑 mainloop 時每個變數卡 1 秒再出錯，有在跑時也要等主執行緒。
+# 改成：背景執行緒只記下名字，主執行緒下次輪詢時再刪。
+# ---------------------------------------------------------------------------
+_VAR_TRASH = []
+_VAR_LOCK = threading.Lock()
+
+
+def _install_safe_variable_del():
+    if getattr(tk.Variable, "_magic_safe_del", False):
+        return
+    orig = tk.Variable.__del__
+
+    def safe_del(self):
+        if threading.current_thread() is threading.main_thread():
+            orig(self)
+            return
+        t = getattr(self, "_tk", None)
+        if t is None:
+            return
+        with _VAR_LOCK:
+            _VAR_TRASH.append((t, self._name, list(self._tclCommands or [])))
+        self._tk = None
+        self._tclCommands = None
+
+    tk.Variable.__del__ = safe_del
+    tk.Variable._magic_safe_del = True
+
+
+def drain_variable_trash():
+    """在主執行緒刪掉背景執行緒回收的 Tcl 變數。"""
+    if not _VAR_TRASH:
+        return 0
+    with _VAR_LOCK:
+        items = _VAR_TRASH[:]
+        del _VAR_TRASH[:]
+    for t, name, cmds in items:
+        try:
+            if t.getboolean(t.call("info", "exists", name)):
+                t.globalunsetvar(name)
+            for c in cmds:
+                t.deletecommand(c)
+        except Exception:
+            pass
+    return len(items)
+
+
 class App:
     UPDATE_INTERVAL_MS = 30 * 60 * 1000
 
     def __init__(self, root, open_path=None, check_updates=True):
+        _install_safe_variable_del()
         self.root = root
         self.dead = False
         self.settings = S.load_settings()
@@ -231,6 +280,7 @@ class App:
     def _poll(self):
         if self.dead:
             return
+        drain_variable_trash()
         t0 = time.perf_counter()
         try:
             while time.perf_counter() - t0 < 0.03:          # 一次最多處理 30 ms，畫面不會被佔住

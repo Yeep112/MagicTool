@@ -841,6 +841,9 @@ def run_gui(rep, timeout=90):
                     raise AssertionError(f"{key}「{a.name}」沒有畫完（{page.right.text.get('1.0', 'end').strip()[:200]}）")
                 _gui_values(key, a.name, page.last["result"])        # 介面用預設參數算出來的數值也要對
                 results.append(f"{key}:{a.name}")
+        # 樣品頁上面沒有畫圖，還沒顯示過：先顯示一次（和機台頁一樣，量的是第二次以後的切換）
+        app.segment.select("Samples")
+        root.update()
         # 再切換一輪（頁面都建好了），量切換時間。先等最後一張圖畫完（剛畫完馬上切走的頁面，回來時才補畫一次）
         pump(lambda: False, 0.8)
         gaps.clear()
@@ -1180,7 +1183,92 @@ def _gui_samples(app, root, pump):
     root.update()
     sd.destroy()
     _gui_samples_edit(app, root, pump, pg, p)
+    _gui_samples_visual(app, root, pump, pg, p)
+    _gui_samples_ppt(app, root, pump, pg, p)
     pg.save_cfg(root="", sheet="", user="", sheet_sync=False)
+
+
+def _gui_samples_ppt(app, root, pump, pg, p):
+    """v0.9：匯出 PPT（單一樣品、多樣品比較）、模板（標題、關掉一步、給教授的說明）存進紀錄檔。"""
+    import re
+    import zipfile
+    from .fab import records as FR
+    s = pg.find("901")
+    pg.refresh_list(select=s["key"])
+    root.update()
+    dlg = pg.open_export()
+    root.update()
+    assert dlg.selected() == [s] and len(dlg.steps.get_children()) == len(pg.record()["steps"])
+    first = dlg.steps.get_children()[0]
+    if dlg.steps.set(first, "on") == "—":
+        dlg.toggle(first)
+    dlg.toggle(first)
+    assert dlg.steps.set(first, "on") == "—"
+    sid = dlg.steps.get_children()[5]
+    dlg.steps.selection_set(sid)
+    root.update()
+    dlg.note.insert("1.0", "給教授：這一步重做過一次")
+    dlg._note_changed()
+    dlg.t_title.set("901 製程報告（selftest）")
+    out = os.path.join(tempfile.mkdtemp(), "901.pptx")
+    dlg.export(out)
+    assert pump(lambda: "已匯出" in dlg.info.cget("text") or "失敗" in dlg.info.cget("text"), 60), dlg.info.cget("text")
+    assert "已匯出" in dlg.info.cget("text"), dlg.info.cget("text")
+    with zipfile.ZipFile(out) as z:
+        xml = " ".join(z.read(n).decode("utf-8") for n in z.namelist() if re.fullmatch(r"ppt/slides/slide\d+\.xml", n))
+    assert "901 製程報告（selftest）" in xml and "給教授：這一步重做過一次" in xml
+    tpl = FR.load(s["path"])["ppt"]
+    assert first in tpl["skip_steps"] and tpl["step_notes"][sid].startswith("給教授") and tpl["title"].endswith("（selftest）")
+    # 多樣品比較、中英並列
+    dlg.slist.selection_clear(0, "end")
+    for lab in ("901", "904"):
+        dlg.slist.selection_set(dlg.samples.index(pg.find(lab)))
+    dlg._load_tpl()
+    dlg.lang.set("both")
+    out2 = os.path.join(tempfile.mkdtemp(), "cmp.pptx")
+    dlg.info.configure(text="")
+    dlg.export(out2)
+    assert pump(lambda: "已匯出" in dlg.info.cget("text") or "失敗" in dlg.info.cget("text"), 60), dlg.info.cget("text")
+    assert "已匯出" in dlg.info.cget("text") and os.path.getsize(out2) > 20000, dlg.info.cget("text")
+    with zipfile.ZipFile(out2) as z:
+        xml = z.read("ppt/slides/slide2.xml").decode("utf-8")
+    assert "樣品比較" in xml and "Sample comparison" in xml
+    dlg.destroy()
+    pg.st["ppt_lang"] = "zh"
+
+
+def _gui_samples_visual(app, root, pump, pg, p):
+    """v0.8：示意圖（剖面 + 俯視）、逐步切換、播放動畫、存圖。"""
+    s = pg.find("901")
+    pg.refresh_list(select=s["key"])
+    root.update()
+    pg.set_view("visual")
+    root.update()
+    n = len(pg.record()["steps"])
+    assert pg.vis and pg.vis_step == n - 1, (pg.vis_step, n)
+    assert pump(lambda: len(pg._outlines.get(s["key"], [])) == 5, 10), "digitalize 的輪廓沒有讀到"
+    fig = pg.vis["fig"]
+    assert len(fig.axes) == 2 and len(fig.axes[1].patches) == 5, (len(fig.axes), len(fig.axes[1].patches))
+    pg.vis_goto(0)
+    assert pg.vis_step == 0 and "第 1 /" in pg.vis["cap"].cget("text")
+    pg.select_step(pg.record()["steps"][3]["id"])          # 時間軸點一步 → 示意圖跟著跳
+    root.update()
+    assert pg.vis_step == 3, pg.vis_step
+    t0 = time.perf_counter()
+    for _ in range(4):
+        pg.vis_step_by(1)
+        root.update()
+    per = (time.perf_counter() - t0) / 4
+    assert per < 1.5, f"示意圖一步要畫 {per:.2f} 秒"
+    pg.vis_goto(0)
+    pg.toggle_play()
+    assert pump(lambda: pg.vis_step >= 2, 6), "播放動畫沒有前進"
+    pg.stop_play()
+    out = pg.save_visual(os.path.join(tempfile.mkdtemp(), "vis.png"))
+    assert os.path.getsize(out) > 5000
+    pg.set_view("detail")
+    root.update()
+    assert pg.sf.winfo_ismapped() and not pg.vis["frame"].winfo_ismapped()
 
 
 def _gui_samples_edit(app, root, pump, pg, p):
@@ -1334,6 +1422,7 @@ def _gui_samples_edit(app, root, pump, pg, p):
         assert nd.winfo_exists() and "已經有" in nd.err.cget("text")
         nd.destroy()
         # ---- ☁ 試算表對話框
+        assert pump(lambda: not pg.pending_sync(), 15), [x["label"] for x in pg.pending_sync()]
         sy = pg.open_sync()
         root.update()
         assert "待更新：0 個樣品" in sy.info.cget("text"), sy.info.cget("text")
