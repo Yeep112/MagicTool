@@ -106,6 +106,8 @@ class App:
     def __init__(self, root, open_path=None, check_updates=True):
         _install_safe_variable_del()
         self.root = root
+        self.prompts = check_updates                 # 一般使用（不是自我測試）：可以跳出「接上蝕刻紀錄表單」之類的提示
+        self._sheet_prompted = False
         # 每個小視窗（精靈、編修、對話框）第一次出現時，裡面的長文字設成放不下就換行
         root.bind_class("Toplevel", "<Map>", self._wrap_toplevel, add="+")
         self.dead = False
@@ -266,6 +268,18 @@ class App:
         self.state["instrument"] = key
         self.save_state_soon()
         self.last_switch_ms = (time.perf_counter() - t0) * 1000
+        if key == "Etching" and self.prompts and not self._sheet_prompted:
+            self.root.after(900, self._maybe_sheet_prompt)
+
+    def _maybe_sheet_prompt(self):
+        """第一次開 Etching、還沒接上實驗室的蝕刻紀錄表單：請使用者貼上團隊設定碼（設定碼不內建在公開的程式裡）。"""
+        if self.dead or self._sheet_prompted or self.current is not self.pages.get("Etching"):
+            return
+        from .sheet_setup import TeamCodePrompt, should_prompt
+        if not should_prompt(self):
+            return
+        self._sheet_prompted = True                  # 這次開軟體只問一次
+        return TeamCodePrompt(self)
 
     def _prebuild(self):
         """啟動後在空檔把其他機台的頁面先建好，之後切換不用等。"""

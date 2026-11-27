@@ -1208,6 +1208,7 @@ def _gui_layout(app, root, pump):
     from .gui import samples_edit as SE
     from .gui import samples_page as SPM
     from .gui.settings_dialog import SettingsDialog
+    from .gui import sheet_setup as SS
     from .testdata import write_samples
     bad = []
     # 按鈕列：很窄時先改成只顯示圖示（同一行），變寬再顯示完整文字
@@ -1280,7 +1281,8 @@ def _gui_layout(app, root, pump):
                        ("樣品設定", lambda: SPM.SampleSettings(pg)), ("從試算表匯入", lambda: SPM.ImportDialog(pg)),
                        ("待確認", lambda: SPM.ReviewDialog(pg)), ("新樣品", pg.open_new_sample),
                        ("樣品結果", pg.open_results), ("擱置", lambda: SE.StateDialog(pg, s, "hold")),
-                       ("試算表", pg.open_sync), ("設定", lambda: SettingsDialog(app))]
+                       ("試算表", pg.open_sync), ("設定", lambda: SettingsDialog(app)),
+                       ("貼上團隊設定碼", lambda: SS.TeamCodePrompt(app)), ("一步一步接 Apps Script", lambda: SS.ScriptGuide(app))]
             for name, make in dialogs:
                 d = make()
                 root.update()
@@ -1365,6 +1367,7 @@ def _gui_sheet(app, root, pump):
         cfg = dlg.collect()["etching"]
         assert cfg["gsheet_token"] == "selftest" and cfg["gsheet_enabled"] and cfg["gsheet_script_url"].endswith("/exec")
         assert dlg.copy_code().startswith(gsync.CODE_PREFIX)
+        _gui_sheet_setup(app, root, pump, dlg, code)
         dlg.destroy()
         gc.collect()
         rp.source_var.set("本機 CSV")
@@ -1374,6 +1377,77 @@ def _gui_sheet(app, root, pump):
         gsync._public_csv, messagebox.askyesno, messagebox.showinfo, messagebox.showerror = saved
         et.clear()
         et.update(old_et)
+
+
+def _gui_sheet_setup(app, root, pump, dlg, code):
+    """v0.9.3：測試連線列出欄位對照、第一次開 Etching 貼團隊設定碼、一步一步接 Apps Script（都不連網路）。"""
+    from .etching import gsync
+    from .gui import sheet_setup as SS
+    from .testdata import team_sheet_values
+    # 真的測試連線（公開連結那條路，資料是合成的舊試算表）：要列出欄位對照
+    msg, ok, cols = SS.sheet_check({"etching": {"gsheet_key": "https://docs.google.com/spreadsheets/d/TEST/edit#gid=0",
+                                                "service_account": os.path.join(tempfile.gettempdir(), "沒有.json")}})
+    assert ok and "讀得到" in msg and cols, (msg, cols)
+    head = team_sheet_values()[0]
+    rep = gsync.columns_report(head)
+    assert "第一次寫入時加在最後面" in cols and "Record ID" in cols and rep["added"][0][0] == gsync.col_letter(rep["width"]), cols
+    # 設定視窗：測試連線後下面出現欄位對照
+    dlg._check = lambda cfg: ("✓ 讀得到（測試）：5 列資料\n✓ 可以寫入（測試）", True, cols)
+    del dlg.test_sheet                                     # 換回真的 test_sheet（剛剛為了不連網路蓋掉）
+    dlg.test_sheet()
+    assert pump(lambda: dlg.cols_view.winfo_manager() == "grid" and "Record ID" in dlg.cols_view.value, 5), \
+        "測試連線後沒有列出欄位對照"
+    assert dlg.cols_view.copy() == cols
+    # 一步一步接 Apps Script：填好就自動測試、每一步打勾、套用寫回設定視窗
+    applied = []
+    real_apply = app.apply_settings
+    app.apply_settings = lambda cfg: applied.append(cfg)
+    try:
+        g = dlg.open_script_guide()
+        root.update()
+        _LAYOUT_EXTRA.extend(_layout_audit(g, "一步一步接 Apps Script"))
+        for k, v in (("gsheet_key", "https://docs.google.com/spreadsheets/d/TEST/edit#gid=0"),
+                     ("gsheet_worksheet", "etching rate"), ("gsheet_token", "Magic Tool 通行碼：abc123def456ghi789"),
+                     ("gsheet_script_url", "https://script.google.com/macros/s/TEST/exec")):
+            g.v[k].set(v)
+        g.copy_script()
+        assert g.values()["gsheet_token"] == "abc123def456ghi789", "整行「Magic Tool 通行碼：…」貼進來要只取通行碼"
+        assert pump(lambda: g.done_steps()[:5] == [True] * 5, 5), f"填好後沒有自動測試連線：{g.done_steps()}"
+        assert g.cols.winfo_manager() and "Record ID" in g.cols.value
+        assert [m.cget("text") for m in g.marks[:5]] == ["✓"] * 5
+        g.v["gsheet_token"].set("changed000000000")      # 改了通行碼 → 要重新測試（自動）
+        assert not g.done_steps()[4], "改了通行碼，「測試連線」的勾要先拿掉"
+        assert pump(lambda: g.done_steps()[4], 5), "改了通行碼後沒有自動重新測試"
+        g.apply()
+        assert applied and applied[-1]["etching"]["gsheet_token"] == "changed000000000"
+        assert dlg.vars["etching.gsheet_script_url"].get().endswith("/exec") and g.done_steps() == [True] * 6
+        assert g.copy_code().startswith(gsync.CODE_PREFIX)
+        g.destroy()
+        # 第一次開 Etching：貼團隊設定碼 → 測試 → 儲存
+        st = app.state.get("etch_sheet_prompt")
+        p = SS.TeamCodePrompt(app, check=lambda cfg: ("✓ 可以寫入（測試）", True, None))
+        root.update()
+        _LAYOUT_EXTRA.extend(_layout_audit(p, "貼上團隊設定碼"))
+        assert not p.use_text("亂打的") and p.save_btn.instate(["disabled"])
+        assert p.use_text(code) and p.save_btn.instate(["!disabled"])
+        assert pump(lambda: "可以寫入" in p.msg.cget("text"), 5), p.msg.cget("text")
+        assert p.save()
+        assert applied[-1]["etching"]["gsheet_token"] == "selftest" and applied[-1]["etching"]["gsheet_enabled"]
+        assert app.state["etch_sheet_prompt"] == "done" and not SS.should_prompt(app)
+        app.state["etch_sheet_prompt"] = "later"
+        old_set = app.settings
+        app.settings = {"etching": {}}
+        assert SS.should_prompt(app), "還沒接上表單、選「以後再說」→ 下次要再問"
+        app.state["etch_sheet_prompt"] = "never"
+        assert not SS.should_prompt(app), "選「不要再問」就不要再跳出來"
+        app.settings = old_set
+        if st is None:
+            app.state.pop("etch_sheet_prompt", None)
+        else:
+            app.state["etch_sheet_prompt"] = st
+        assert app.prompts is False and app._maybe_sheet_prompt() is None, "自我測試時不應該跳出提示"
+    finally:
+        app.apply_settings = real_apply
 
 
 def _gui_samples(app, root, pump):

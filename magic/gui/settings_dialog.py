@@ -6,47 +6,19 @@ from __future__ import annotations
 
 import copy
 import os
-import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 from .. import __version__
 from ..core import settings as S
 from . import theme as T
-from .widgets import ScrollFrame, auto_wrap, fit_label, fit_window
+from .widgets import ScrollFrame, WrapRow, auto_wrap, fit_label, fit_window
 
 
 def sheet_status(cfg):
     """測試連線：讀得到嗎？能寫嗎？第一次寫入會加幾個欄位？回傳 (訊息, 是否成功)。"""
-    from ..etching import gsync
-    lines, ok = [], True
-    try:
-        values, how = gsync.read_values(cfg)
-        n = max(0, len([r for r in values[1:] if any(str(c).strip() for c in r)]))
-        lines.append(f"✓ 讀得到（{how}）：{n} 列資料")
-        try:
-            _, width, missing = gsync.plan(values[0] if values else [])
-            if missing and width:
-                lines.append(f"‧ 原本 {width} 欄不會動；第一次寫入時會在最後面加 {len(missing)} 個欄位")
-        except gsync.SheetError as e:
-            lines.append(f"✗ {e}")
-            ok = False
-    except gsync.SheetError as e:
-        return f"✗ {e}", False
-    if gsync.can_write(cfg):
-        try:
-            sh = gsync.writer(cfg)
-            if isinstance(sh, gsync.ScriptSheet):
-                res = sh.call("ping")
-                lines.append(f"✓ 可以寫入（Apps Script → {res.get('title', '')} / {res.get('sheet', '')}）")
-            else:
-                lines.append(f"✓ 可以寫入（服務帳號 → {sh.title}）")
-        except Exception as e:
-            lines.append(f"✗ 寫入：{e}")
-            ok = False
-    else:
-        lines.append("‧ 唯讀：要寫入請貼上團隊設定碼（Apps Script）或指定服務帳號金鑰")
-    return "\n".join(lines), ok
+    from .sheet_setup import sheet_check
+    return sheet_check(cfg)[:2]
 
 
 class SettingsDialog(tk.Toplevel):
@@ -176,12 +148,13 @@ class SettingsDialog(tk.Toplevel):
                  bg=T.CARD, fg=T.MUTED, font=T.font(9), justify="left", wraplength=T.px(560)).grid(
             row=r, column=0, columnspan=3, sticky="w", pady=(0, 4))
         r += 1
-        row = tk.Frame(body, bg=T.CARD)
-        row.grid(row=r, column=1, columnspan=2, sticky="w", pady=4)
-        ttk.Button(row, text="📥 貼上團隊設定碼", style="Neutral.Small.TButton", command=self.paste_code).pack(side="left")
-        ttk.Button(row, text="📋 複製團隊設定碼", style="Neutral.Small.TButton", command=self.copy_code).pack(
-            side="left", padx=6)
-        ttk.Button(row, text="📖 設定教學", style="Neutral.Small.TButton", command=self.open_sheet_guide).pack(side="left")
+        row = WrapRow(body, bg=T.CARD, padx=6)
+        row.grid(row=r, column=1, columnspan=2, sticky="ew", pady=4)
+        row.add(ttk.Button(row, text="📥 貼上團隊設定碼", style="Neutral.Small.TButton", command=self.paste_code), padx=0)
+        row.add(ttk.Button(row, text="📋 複製團隊設定碼", style="Neutral.Small.TButton", command=self.copy_code))
+        row.add(ttk.Button(row, text="🧭 一步一步接 Apps Script", style="Neutral.Small.TButton",
+                           command=self.open_script_guide))
+        row.add(ttk.Button(row, text="📖 設定教學", style="Neutral.Small.TButton", command=self.open_sheet_guide))
         r += 1
         gv = tk.BooleanVar(value=bool(et.get("gsheet_enabled")))
         ttk.Checkbutton(body, text="新增 / 修改 / 刪除紀錄時也同步到 Google Sheet", variable=gv,
@@ -233,11 +206,17 @@ class SettingsDialog(tk.Toplevel):
                             "金鑰不要放在工具資料夾或會同步、分享的資料夾。試算表要共用給金鑰裡的 client_email（編輯者）。")
         r += 2
         row = tk.Frame(body, bg=T.CARD)
-        row.grid(row=r, column=1, columnspan=2, sticky="w", pady=(8, 0))
-        self.test_lab = tk.Label(row, text="", bg=T.CARD, fg=T.MUTED, font=T.font(9), justify="left",
-                                 wraplength=T.px(460))
-        ttk.Button(row, text="測試連線", style="Neutral.Small.TButton", command=self.test_sheet).pack(side="left")
-        self.test_lab.pack(side="left", padx=8)
+        row.grid(row=r, column=1, columnspan=2, sticky="ew", pady=(8, 0))
+        self.test_lab = fit_label(tk.Label(row, text="", bg=T.CARD, fg=T.MUTED, font=T.font(9), justify="left",
+                                           anchor="w", wraplength=T.px(460)))
+        ttk.Button(row, text="測試連線", style="Neutral.Small.TButton", command=self.test_sheet).pack(side="left",
+                                                                                                   anchor="n")
+        self.test_lab.pack(side="left", padx=8, fill="x", expand=True)
+        r += 1
+        from .sheet_setup import ColumnsView
+        self.cols_view = ColumnsView(body, bg=T.CARD)          # 測試連線成功後才出現
+        self.cols_view.grid(row=r, column=0, columnspan=3, sticky="ew", pady=(8, 0))
+        self.cols_view.grid_remove()
 
     def _look_tab(self, nb):
         body = self._tab(nb, "外觀")
@@ -315,14 +294,28 @@ class SettingsDialog(tk.Toplevel):
         self.app.status("設定已儲存" + ("（介面大小重新開啟後套用）" if restart_needed else ""), "ok")
 
     def test_sheet(self):
+        from .sheet_setup import run_check
         cfg = self.collect()
         self.test_lab.configure(text="連線中…", fg=T.MUTED)
+        run_check(self.app, cfg, self.show_test, getattr(self, "_check", None))
 
-        def work():
-            msg, ok = sheet_status(cfg)
-            self.app.post(("call", lambda: self.test_lab.winfo_exists() and self.test_lab.configure(
-                text=msg, fg=T.SUCCESS if ok else T.ERROR)))
-        threading.Thread(target=work, daemon=True).start()
+    def show_test(self, msg, ok, cols=None):
+        """測試連線的結果；讀得到標題列時，下面列出欄位對照（方便先在 AppSheet 對好欄位）。"""
+        try:
+            if not self.test_lab.winfo_exists():
+                return
+        except tk.TclError:
+            return
+        self.test_lab.configure(text=msg, fg=T.SUCCESS if ok else T.ERROR)
+        if cols:
+            self.cols_view.show(cols)
+            self.cols_view.grid()
+        else:
+            self.cols_view.grid_remove()
+
+    def open_script_guide(self):
+        from .sheet_setup import ScriptGuide
+        return ScriptGuide(self.app, self, check=getattr(self, "_check", None))
 
     def paste_code(self, text=None):
         from ..etching import gsync

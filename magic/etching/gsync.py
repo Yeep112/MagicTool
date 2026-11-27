@@ -83,6 +83,91 @@ def plan(head):
     return m, width, missing
 
 
+# 每個欄位的說明與 AppSheet 建議型別（「測試連線」後列給使用者，方便在 AppSheet 那邊先對好欄位）
+COLUMN_HELP = {
+    "DateTime": ("寫入時間", "DateTime"), "Method": ("機台（ICP / RIE…）", "Text"),
+    "Power": ("功率（文字，例如 ICP 300W / RF 30W）", "Text"), "Bias": ("DC bias（文字）", "Text"),
+    "Pressure": ("壓力（文字）", "Text"), "Type": ("量法（direct…）", "Text"), "Name": ("操作者", "Text"),
+    "H_hBN_before (nm)": ("材料蝕刻前高度", "Decimal"), "H_hBN_after (nm)": ("材料蝕刻後高度", "Decimal"),
+    "H_marker_before (nm)": ("marker 蝕刻前高度", "Decimal"), "H_marker_after (nm)": ("marker 蝕刻後高度", "Decimal"),
+    "H_SiO2_before (nm)": ("SiO2 蝕刻前高度", "Decimal"), "H_SiO2_after (nm)": ("SiO2 蝕刻後高度", "Decimal"),
+    "T (sec)": ("總蝕刻時間", "Decimal"), "Δ_marker (nm)": ("= d_SiO2", "Decimal"),
+    "Δ_hBN (nm)": ("= d_材料 − d_SiO2", "Decimal"), "Δ_SiO2 (nm)": ("= d_SiO2", "Decimal"),
+    "R_SiO2(nm/sec)": ("SiO2 蝕刻率", "Decimal"), "R_hBN(nm/sec)": ("材料蝕刻率", "Decimal"),
+    "Gas": ("氣體（文字，例如 CHF3+O2）", "Text"),
+    "Schema": ("紀錄格式版本", "Text"), "Material": ("蝕刻的材料", "Text"), "Resist": ("光阻", "Text"),
+    "Resist thickness (nm)": ("光阻厚度", "Decimal"), "Line width (nm)": ("線寬", "Decimal"),
+    "Gas 1": ("氣體 1", "Text"), "Flow 1 (sccm)": ("流量 1", "Decimal"),
+    "Gas 2": ("氣體 2", "Text"), "Flow 2 (sccm)": ("流量 2", "Decimal"),
+    "Gas 3": ("氣體 3", "Text"), "Flow 3 (sccm)": ("流量 3", "Decimal"),
+    "ICP power (W)": ("ICP 功率", "Decimal"), "RF power (W)": ("RF 功率", "Decimal"),
+    "DC bias (V)": ("DC bias", "Decimal"), "Pressure (Pa)": ("壓力", "Decimal"),
+    "Etch steps (s)": ("分段時間（例如 20+20+5）", "Text"), "N steps": ("分幾段", "Number"),
+    "SiO2 method": ("SiO2 量法", "Text"), "Material method": ("材料量法", "Text"),
+    "d_SiO2 (nm)": ("SiO2 被蝕刻掉的厚度", "Decimal"), "σ d_SiO2 (nm)": ("誤差", "Decimal"),
+    "d_material (nm)": ("材料被蝕刻掉的厚度", "Decimal"), "σ d_material (nm)": ("誤差", "Decimal"),
+    "σ R_SiO2 (nm/sec)": ("SiO2 蝕刻率誤差", "Decimal"), "σ R_material (nm/sec)": ("材料蝕刻率誤差", "Decimal"),
+    "Selectivity": ("選擇比（材料 / SiO2）", "Decimal"), "Etched through": ("是否蝕穿", "Text"),
+    "Raw inputs": ("原始輸入（JSON，軟體用）", "LongText"), "Notes": ("備註", "LongText"),
+    "Resist after (nm)": ("光阻蝕刻後厚度", "Decimal"), "d_resist (nm)": ("光阻被蝕刻掉的厚度", "Decimal"),
+    "R_resist (nm/sec)": ("光阻蝕刻率", "Decimal"), "σ R_resist (nm/sec)": ("光阻蝕刻率誤差", "Decimal"),
+    "Selectivity (material/resist)": ("選擇比（材料 / 光阻）", "Decimal"),
+    "SiO2 cross-check": ("SiO2 交叉檢查", "Text"), "Material cross-check": ("材料交叉檢查", "Text"),
+    "Record ID": ("紀錄編號（修改 / 刪除用，不要改）", "Text"), "Revision": ("修改次數", "Number"),
+    "Modified at": ("最後修改時間", "DateTime"), "OM before": ("蝕刻前 OM 照片（路徑）", "Text"),
+    "OM after": ("蝕刻後 OM 照片（路徑）", "Text"),
+}
+
+
+def col_letter(j):
+    """0 → A、25 → Z、26 → AA。"""
+    s = ""
+    j += 1
+    while j:
+        j, r = divmod(j - 1, 26)
+        s = chr(65 + r) + s
+    return s
+
+
+def columns_report(head):
+    """試算表目前的欄位、Magic Tool 第一次寫入時會加的欄位。
+
+    回傳 {"current": [(欄, 試算表標題, 對應的軟體欄位或 None)], "added": [(欄, 欄位)], "width": 原本幾欄}；
+    標題列不是蝕刻紀錄 → SheetError。"""
+    m, width, missing = plan(head)
+    head = [str(h) for h in (head or [])][:width]
+    inv = {j: c for c, j in m.items() if j < width}
+    cur = [(col_letter(j), h, inv.get(j)) for j, h in enumerate(head)]
+    added = [(col_letter(m[c]), c) for c in missing]
+    return {"current": cur, "added": added, "width": width}
+
+
+def columns_text(rep):
+    """欄位對照的文字（可以直接貼給別人或對照 AppSheet）。"""
+    lines = [f"試算表目前的欄位（{rep['width']} 欄，Magic Tool 不會改名、不會搬動）："]
+    for col, h, c in rep["current"]:
+        if not str(h).strip():
+            lines.append(f"  {col:>3}  （空白）")
+            continue
+        if c is None:
+            lines.append(f"  {col:>3}  {h}　← Magic Tool 不使用（不會動）")
+        else:
+            desc = COLUMN_HELP.get(c, ("", ""))[0]
+            same = "" if c == h else f" = {c}"
+            lines.append(f"  {col:>3}  {h}{same}" + (f"　{desc}" if desc else ""))
+    if rep["added"]:
+        lines.append("")
+        lines.append(f"第一次寫入時加在最後面（{rep['added'][0][0]} 欄起，共 {len(rep['added'])} 欄）"
+                     "　AppSheet 要到 Data → 這張表按「Regenerate structure」才看得到：")
+        for col, c in rep["added"]:
+            desc, typ = COLUMN_HELP.get(c, ("", "Text"))
+            lines.append(f"  {col:>3}  {c}　{desc}　［AppSheet：{typ}］")
+    else:
+        lines.append("")
+        lines.append("Magic Tool 需要的欄位都已經有了，寫入時不會再加欄位。")
+    return "\n".join(lines)
+
+
 def sheet_value(col, v):
     """一格要寫進 Google Sheet 的文字（空白回傳 ""）。"""
     v = _cell(v)
