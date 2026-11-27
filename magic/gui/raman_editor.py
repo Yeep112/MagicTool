@@ -9,6 +9,7 @@
   ⌫ 橡皮擦（點 / 塗抹）：左鍵點一下 = 擦掉滑鼠附近的點；按住左鍵拖曳 = 沿路擦掉；右鍵 = 恢復（筆刷大小可以調）
   ⬚ 橡皮擦（框選）：拖曳畫框 → 框裡的點被擦掉（上下兩張圖都可以框）；只點一下也會擦掉滑鼠附近的點
   ↺ 還原筆：拖曳畫框 → 框裡被擦掉的點恢復；只點一下 = 恢復滑鼠附近的點
+  🔍 找尖峰：自動找出宇宙射線（1～3 個點寬、突然衝高的尖峰），用紅圈標出來，確認後一鍵擦掉
   ✚ 背景錨點：左鍵點一下新增、拖曳移動；右鍵刪除最近的錨點
   🔍 縮放 / 平移：用工具列（這時滑鼠不會改到資料）
 """
@@ -22,13 +23,16 @@ from tkinter import ttk
 import numpy as np
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 from matplotlib.figure import Figure
+from matplotlib.patches import Circle
+from matplotlib.transforms import IdentityTransform
 from matplotlib.widgets import RectangleSelector
 
 from ..raman import edits as E
+from ..raman.spikes import find_spikes
 from ..readers import load
 from ..readers.raman_txt import xy
 from . import theme as T
-from .widgets import Paned
+from .widgets import Paned, keep_figure_fit
 
 MODES = [("view", "🔍 縮放 / 平移"), ("brush", "⌫ 橡皮擦（點 / 塗抹）"), ("erase", "⬚ 橡皮擦（框選）"),
          ("restore", "↺ 還原筆（框選）"), ("anchor", "✚ 背景錨點")]
@@ -65,6 +69,8 @@ class RamanEditor(tk.Toplevel):
         self.drag = None
         self.stroke = None                    # 筆刷正在畫的那一筆（放開滑鼠才算一步）
         self._click = None                    # 框選模式：按下的位置（沒有拖曳 = 點一下）
+        self.spikes = None                    # 🔍 找到、還沒擦掉的尖峰（True = 尖峰的點）
+        self._bg = None                       # 筆刷圓圈用：沒有圓圈時的畫面（blit 才不用整張重畫）
         self.changed = False
         a = T.accent(self.key)
         head = tk.Frame(self, bg=a["main"], padx=16, pady=8)
@@ -170,6 +176,22 @@ class RamanEditor(tk.Toplevel):
                    command=lambda: self.clear("anchors")).pack(side="right", padx=(2, 8))
         ttk.Button(r2, text="還原所有擦掉的點", style=f"{self.key}.Small.TButton",
                    command=lambda: self.clear("erase")).pack(side="right", padx=2)
+        r3 = tk.Frame(bar, bg=T.SUBTLE)
+        r3.pack(fill="x", pady=(0, 4))
+        tk.Label(r3, text="尖峰", bg=T.SUBTLE, fg=T.MUTED, font=T.font(9, "bold")).pack(side="left", padx=(8, 6))
+        ttk.Button(r3, text="🔍 找尖峰（宇宙射線）", style=f"{self.key}.Small.TButton",
+                   command=self.find_spikes).pack(side="left")
+        tk.Label(r3, text="靈敏度", bg=T.SUBTLE, fg=T.MUTED, font=T.font(9)).pack(side="left", padx=(10, 2))
+        self.spike_k = tk.StringVar(value="6")
+        ttk.Spinbox(r3, from_=3, to=15, increment=0.5, textvariable=self.spike_k, width=4).pack(side="left")
+        tk.Label(r3, text="（越小越敏感）　最多", bg=T.SUBTLE, fg=T.FAINT, font=T.font(8)).pack(side="left", padx=(2, 2))
+        self.spike_w = tk.StringVar(value="3")
+        ttk.Spinbox(r3, from_=1, to=5, textvariable=self.spike_w, width=2).pack(side="left")
+        tk.Label(r3, text="個點寬", bg=T.SUBTLE, fg=T.FAINT, font=T.font(8)).pack(side="left", padx=(2, 10))
+        self.spike_lab = tk.Label(r3, text="", bg=T.SUBTLE, fg=T.TEXT, font=T.font(9))
+        self.spike_lab.pack(side="left")
+        self.spike_cancel = ttk.Button(r3, text="取消", style=f"{self.key}.Small.TButton", command=self.cancel_spikes)
+        self.spike_erase = ttk.Button(r3, text="", style=f"{self.key}.Accent.TButton", command=self.erase_spikes)
 
     def _build_figure(self, parent):
         holder = tk.Frame(parent, bg=T.CARD)
@@ -189,6 +211,13 @@ class RamanEditor(tk.Toplevel):
         self.canvas.mpl_connect("button_press_event", self._press)
         self.canvas.mpl_connect("motion_notify_event", self._motion)
         self.canvas.mpl_connect("button_release_event", self._release)
+        self._fit = keep_figure_fit(self.canvas)          # 螢幕縮放時圖不會比視窗大（跑版）
+        # 筆刷範圍：跟著滑鼠走的半透明圓圈（animated + blit：移動滑鼠不用整張圖重畫）
+        self.brush_circle = Circle((0, 0), 10, transform=IdentityTransform(), facecolor="#ef4444",
+                                   edgecolor="#b91c1c", alpha=0.22, lw=1.2, animated=True, visible=False)
+        self.fig.add_artist(self.brush_circle)
+        self.canvas.mpl_connect("draw_event", self._on_draw)
+        self.canvas.mpl_connect("figure_leave_event", lambda e: self._hide_circle())
 
     # ================================================================== 模式
     def set_mode(self, mode):
@@ -210,7 +239,9 @@ class RamanEditor(tk.Toplevel):
             except Exception:
                 pass
         self.hint.configure(text=HINTS[mode])
-        cursor = {"brush": "circle", "erase": "crosshair", "restore": "crosshair", "anchor": "tcross"}.get(mode, "")
+        if mode != "brush":
+            self._hide_circle()
+        cursor = {"brush": "crosshair", "erase": "crosshair", "restore": "crosshair", "anchor": "tcross"}.get(mode, "")
         try:
             self.canvas.get_tk_widget().configure(cursor=cursor)
         except tk.TclError:
@@ -229,6 +260,8 @@ class RamanEditor(tk.Toplevel):
             self.hint.configure(text=f"讀不到 {os.path.basename(path)}：{e}", fg=T.ERROR)
             return
         self.path = path
+        self.spikes = None
+        self._spike_ui(0)
         self.x, self.y = xy(ds)
         self.sig = E.signature(self.x)
         ed = self.store.get(path)
@@ -345,9 +378,13 @@ class RamanEditor(tk.Toplevel):
         except (ValueError, AttributeError):
             return 10.0
 
+    def brush_r(self):
+        """筆刷半徑（畫布上的實際像素）：螢幕縮放 150% 時，10 px 的筆刷在畫布上是 15 個實際像素。"""
+        return self.brush_px() * float(getattr(self.canvas, "device_pixel_ratio", 1) or 1)
+
     def near_mask(self, ax, px, py, r=None):
         """這張圖上，離螢幕位置 (px, py) 在 r 像素以內的點（上圖用原始值、下圖用扣背景後的值）。"""
-        r = self.brush_px() if r is None else r
+        r = self.brush_r() if r is None else r
         values = self.y if ax is self.ax1 else self.y - self._bg_full()
         pts = ax.transData.transform(np.column_stack([self.x, values]))
         return np.hypot(pts[:, 0] - px, pts[:, 1] - py) <= r
@@ -357,7 +394,7 @@ class RamanEditor(tk.Toplevel):
         mask = self.near_mask(st["ax"], event.x, event.y)
         if st.get("last") is not None:                      # 滑鼠移動很快時，兩點之間也要擦到
             x0, y0 = st["last"]
-            steps = int(np.hypot(event.x - x0, event.y - y0) // max(self.brush_px() * 0.7, 1))
+            steps = int(np.hypot(event.x - x0, event.y - y0) // max(self.brush_r() * 0.7, 1))
             for k in range(1, steps + 1):
                 f = k / (steps + 1)
                 mask |= self.near_mask(st["ax"], x0 + (event.x - x0) * f, y0 + (event.y - y0) * f)
@@ -450,6 +487,11 @@ class RamanEditor(tk.Toplevel):
             self.add_anchor(event.xdata, event.ydata)
 
     def _motion(self, event):
+        if self.mode_var.get() == "brush" and not str(getattr(self.toolbar, "mode", "")):
+            if event.inaxes in (self.ax1, self.ax2) and event.x is not None:
+                self._show_circle(event.x, event.y)
+            else:
+                self._hide_circle()
         if self.stroke is not None:
             if event.inaxes is self.stroke["ax"] and event.x is not None:
                 self._brush_at(event)
@@ -518,6 +560,10 @@ class RamanEditor(tk.Toplevel):
             a1.plot(x, bg, "--", color="#f2a541", lw=1.6, label="手動背景")
             ap = np.asarray(self.ed["anchors"], float)
             a1.plot(ap[:, 0], ap[:, 1], "s", color="#f2a541", mec="#b45309", ms=7, label=f"錨點（{len(ap)}）")
+        sp = self.spikes if self.spikes is not None and self.spikes.size == x.size else None
+        if sp is not None and sp.any():
+            a1.plot(x[sp], y[sp], "o", mfc="none", mec="#dc2626", ms=12, mew=2,
+                    label=f"找到的尖峰（{int(sp.sum())} 點）")
         a1.set_ylabel("Intensity（原始）")
         a1.set_title(os.path.basename(self.path or ""), loc="left", fontsize=10)
         a1.legend(fontsize=8, loc="upper left")
@@ -525,6 +571,8 @@ class RamanEditor(tk.Toplevel):
         a2.plot(x[~er], corr[~er], color=T.accent(self.key)["main"], lw=1.1)
         if er.any():
             a2.plot(x[er], corr[er], "x", color="#9ca3af", ms=5, mew=1.2)
+        if sp is not None and sp.any():
+            a2.plot(x[sp], corr[sp], "o", mfc="none", mec="#dc2626", ms=12, mew=2)
         a2.axhline(0, color="#9ca3af", lw=0.8)
         a2.set_ylabel("扣手動背景後" if has_bg else "（還沒有錨點：顯示原始）")
         a2.set_xlabel("Raman shift (cm$^{-1}$)")
@@ -543,6 +591,100 @@ class RamanEditor(tk.Toplevel):
         if reset_view:
             self.toolbar.update()                       # Home = 這個檔案的全部範圍
         self.canvas.draw_idle()
+
+    # ================================================================== 筆刷圓圈
+    def _on_draw(self, event=None):
+        """每次整張圖畫完：存下沒有圓圈的畫面，再把圓圈畫上去。"""
+        try:
+            self._bg = self.canvas.copy_from_bbox(self.fig.bbox)
+            if self.brush_circle.get_visible():
+                self.fig.draw_artist(self.brush_circle)
+        except Exception:
+            self._bg = None
+
+    def _show_circle(self, px, py):
+        c = self.brush_circle
+        restore = bool(self.stroke and self.stroke["restore"])
+        col, edge = ("#16a34a", "#15803d") if restore else ("#ef4444", "#b91c1c")
+        c.set_facecolor(col)
+        c.set_edgecolor(edge)
+        c.center = (px, py)
+        c.set_radius(self.brush_r())
+        c.set_visible(True)
+        self._blit()
+
+    def _hide_circle(self):
+        if self.brush_circle.get_visible():
+            self.brush_circle.set_visible(False)
+            self._blit()
+
+    def _blit(self):
+        if self._bg is None:
+            return
+        try:
+            self.canvas.restore_region(self._bg)
+            if self.brush_circle.get_visible():
+                self.fig.draw_artist(self.brush_circle)
+            self.canvas.blit(self.fig.bbox)
+        except Exception:
+            pass
+
+    # ================================================================== 🔍 找尖峰
+    def find_spikes(self):
+        """在還沒擦掉的點裡找宇宙射線尖峰，用紅圈標出來（還沒擦掉，按「擦掉」才擦）。"""
+        if self.path is None:
+            return 0
+        try:
+            k = max(2.0, min(20.0, float(self.spike_k.get())))
+        except ValueError:
+            k = 6.0
+        try:
+            mw = max(1, min(5, int(float(self.spike_w.get()))))
+        except ValueError:
+            mw = 3
+        keep = np.flatnonzero(~E.erased_mask(self.x, self.ed.get("erase")))
+        mask = np.zeros(self.x.size, bool)
+        runs = find_spikes(self.y[keep], k=k, max_width=mw)
+        for a, b in runs:
+            mask[keep[a:b + 1]] = True
+        self.spikes = mask if runs else None
+        self._spike_ui(len(runs), int(mask.sum()))
+        if not runs:
+            self.hint.configure(text=f"沒有找到尖峰（靈敏度 {k:g}）。看得到卻沒找到：把靈敏度調小（例如 5）再找一次", fg=T.MUTED)
+        else:
+            where = "、".join(f"{self.x[keep[a]]:.0f}" for a, b in runs[:8]) + ("…" if len(runs) > 8 else "")
+            self.hint.configure(text=f"找到 {len(runs)} 個尖峰（紅圈；位置 {where} cm⁻¹）。確認後按「擦掉」；"
+                                     "有不是尖峰的，可以先用還原筆或取消", fg=T.MUTED)
+        self.redraw(light=True)
+        return len(runs)
+
+    def _spike_ui(self, n_spikes, n_points=0):
+        if not hasattr(self, "spike_lab"):
+            return
+        if n_spikes:
+            self.spike_lab.configure(text=f"找到 {n_spikes} 個（{n_points} 點，紅圈）")
+            self.spike_erase.configure(text=f"⌫ 擦掉這 {n_spikes} 個")
+            self.spike_erase.pack(side="left", padx=(8, 4))
+            self.spike_cancel.pack(side="left")
+        else:
+            self.spike_lab.configure(text="")
+            self.spike_erase.pack_forget()
+            self.spike_cancel.pack_forget()
+
+    def erase_spikes(self):
+        if self.spikes is None or not self.spikes.any():
+            return 0
+        n = self.apply_hits(self.spikes, restore=False)
+        self.spikes = None
+        self._spike_ui(0)
+        self.redraw(light=True)
+        return n
+
+    def cancel_spikes(self):
+        self.spikes = None
+        self._spike_ui(0)
+        self.hint.configure(text="已取消，沒有擦掉任何點", fg=T.MUTED)
+        self.redraw(light=True)
 
     def close(self):
         try:

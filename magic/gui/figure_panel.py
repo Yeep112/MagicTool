@@ -218,6 +218,14 @@ class FigurePanel(tk.Frame):
         head.pack(fill="x", pady=(6, 0))
         self.style_btn = ttk.Button(head, text="", style=f"{self.key}.Small.TButton", command=self.toggle_style)
         self.style_btn.pack(side="left")
+        # ↺ 回到初始：拖曳過的圖例、峰標註、文字標註回到原位，隱藏的資料重新顯示，縮放回到全部範圍
+        self.reset_btn = ttk.Button(head, text="↺ 回到初始", style=f"{self.key}.Small.TButton", command=self.reset_all)
+        self.reset_btn.pack(side="left", padx=(6, 0))
+        from .params_panel import Tooltip
+        Tooltip(self.reset_btn, "這張圖：拖曳過的圖例、峰標註（G、2D…）、文字標註回到原來的位置，"
+                                "點掉（隱藏）的資料重新顯示，放大 / 平移回到全部範圍。\n標題、樣式、標註的文字與顏色不會改。")
+        self._reset_snap = None
+        self._reset_job = None
         self.style_head = head
         bar = tk.Frame(self, bg=T.SUBTLE, highlightthickness=1, highlightbackground=T.BORDER)
         self.style_bar = bar
@@ -257,8 +265,6 @@ class FigurePanel(tk.Frame):
         g = r1.group()
         ttk.Button(g, text="✎ 標題與軸標籤", style=f"{self.key}.Small.TButton", command=self.edit_labels).pack(
             side="left", pady=2)
-        ttk.Button(g, text="↺ 圖例", style=f"{self.key}.Small.TButton", command=self.reset_legends).pack(
-            side="left", padx=(4, 0), pady=2)
         # 圖表樣式（格線、各種字體大小）
         g = r2.group()
         lab(g, "圖表樣式", True, (2, 6))
@@ -464,11 +470,59 @@ class FigurePanel(tk.Frame):
     def edit_labels(self):
         self.tools.edit_labels(self.winfo_toplevel(), self.key, self.restyle)
 
-    def reset_legends(self):
-        n = self.tools.hidden_count()
-        self.tools.reset()
-        self.tools.status("圖例回到原位" + (f"、{n} 條隱藏的資料重新顯示" if n else "") + "（文字標註也回到原位）", "ok")
+    RESET_KEYS = ("legend", "hidden", "annot")      # 位置與顯示狀態（不含標題、樣式、標註內容）
+    RESET_UNDO_MS = 10000
+
+    def reset_all(self):
+        """↺ 回到初始（這張圖）。10 秒內可以按「↶ 復原」回到剛才的樣子。"""
+        if self._reset_snap is not None and str(self.reset_btn.cget("text")).startswith("↶"):
+            return self.undo_reset()
+        import copy
+        ov = self.tools.get_ov() or {}
+        snap = {k: copy.deepcopy(ov[k]) for k in self.RESET_KEYS if ov.get(k)}
+        n_hidden = self.tools.hidden_count()
+        n_moved = len((snap.get("legend") or {})) + len((snap.get("annot") or {}))
+        self.tools.reset(self.RESET_KEYS)
         self.redraw_request()
+        self.fit_view()
+        parts = []
+        if n_moved:
+            parts.append(f"{n_moved} 個圖例 / 標註回到原位")
+        if n_hidden:
+            parts.append(f"{n_hidden} 條隱藏的資料重新顯示")
+        parts.append("縮放回到全部範圍")
+        if snap:
+            self._reset_snap = snap
+            self.reset_btn.configure(text="↶ 復原")
+            if self._reset_job is not None:
+                self.after_cancel(self._reset_job)
+            self._reset_job = self.after(self.RESET_UNDO_MS, self._end_reset_undo)
+            self.tools.status("已回到初始：" + "、".join(parts) + "（10 秒內按「↶ 復原」可以還原）", "ok")
+        else:
+            self.tools.status("已回到初始（沒有移動過的圖例或標註）：縮放回到全部範圍", "ok")
+        return n_moved + n_hidden
+
+    reset_legends = reset_all                       # 舊名稱（相容）
+
+    def undo_reset(self):
+        snap, self._reset_snap = self._reset_snap, None
+        self._end_reset_undo()
+        if not snap:
+            return 0
+        ov = self.tools.get_ov()
+        ov.update(snap)
+        self.tools.save()
+        self.redraw_request()
+        self.tools.status("已復原（圖例、標註回到剛才的位置）", "ok")
+        return len(snap)
+
+    def _end_reset_undo(self):
+        self._reset_job = None
+        self._reset_snap = None
+        try:
+            self.reset_btn.configure(text="↺ 回到初始")
+        except tk.TclError:
+            pass
 
     # ------------------------------------------------------------------ 版面
     def fixed(self):

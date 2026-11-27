@@ -303,7 +303,7 @@ class FigTools:
                 idx = str(axes.index(d["ax"])) if d["ax"] in axes else None
                 if idx is not None and "pos" in d:
                     ov.setdefault("legend", {})[idx] = [round(v, 4) for v in d["pos"]]
-                    self.status("圖例已移動（會記住位置；「↺ 圖例」可以回到原位）", "ok")
+                    self.status("圖例已移動（會記住位置；「↺ 回到初始」可以回到原位）", "ok")
             elif "off" in d:
                 ov.setdefault("annot", {})[d["art"].magic_key] = [round(v, 1) for v in d["off"]]
                 self.status("文字已移動（會記住位置）", "ok")
