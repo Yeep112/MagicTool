@@ -13,7 +13,7 @@ from tkinter import colorchooser, ttk
 
 from ..raman import labels as L
 from . import theme as T
-from .widgets import fit_window
+from .widgets import WrapRow, fit_label, fit_window
 
 COLS = [("show", "顯示", 44), ("text", "文字", 110), ("x", "位置 (cm⁻¹)", 84), ("follow", "跟隨擬合", 84),
         ("color", "顏色", 70), ("size", "大小", 44), ("font", "字型", 120)]
@@ -50,10 +50,12 @@ class PeakLabelDialog(tk.Toplevel):
         head = tk.Frame(self, bg=a["main"], padx=14, pady=7)
         head.pack(fill="x")
         tk.Label(head, text="🏷 峰標註", bg=a["main"], fg="white", font=T.font(12, "bold")).pack(side="left")
-        tk.Label(head, text="　每個峰代表什麼；改了馬上套用到圖上。圖上的標註可以直接拖曳", bg=a["main"],
-                 fg=T.mix_color("#ffffff", a["main"], 0.25), font=T.font(9)).pack(side="left")
+        sub = tk.Label(head, text="　每個峰代表什麼；改了馬上套用到圖上。圖上的標註可以直接拖曳", bg=a["main"],
+                       fg=T.mix_color("#ffffff", a["main"], 0.25), font=T.font(9), justify="left")
+        sub.pack(side="left", fill="x", expand=True)
+        fit_label(sub)
 
-        bar = tk.Frame(self, bg=T.CARD)
+        bar = WrapRow(self, bg=T.CARD, padx=6)
         bar.pack(fill="x", padx=12, pady=(8, 4))
         mb = ttk.Button(bar, text="＋ 新增常見的峰 ▾", style=f"{self.key}.Ghost.TButton")
         menu = tk.Menu(mb, tearoff=False)
@@ -66,17 +68,23 @@ class PeakLabelDialog(tk.Toplevel):
             menu.add_cascade(label=group, menu=sub)
         menu.add_separator()
         menu.add_command(label="自訂（空白）", command=lambda: self.add("峰", 1000.0, None))
-        mb.pack(side="left")
+        bar.add(mb, padx=0)
         self.pick_btn = ttk.Button(bar, text="⌖ 在圖上點選新增", style=f"{self.key}.Ghost.TButton", command=self.pick)
-        self.pick_btn.pack(side="left", padx=6)
-        ttk.Button(bar, text="刪除", style=f"{self.key}.Ghost.TButton", command=self.delete).pack(side="left")
-        ttk.Button(bar, text="恢復預設", style=f"{self.key}.Small.TButton", command=self.reset).pack(side="right")
-        ttk.Button(bar, text="標註回原位", style=f"{self.key}.Small.TButton", command=self.reset_positions).pack(
-            side="right", padx=6)
+        bar.add(self.pick_btn)
+        bar.add(ttk.Button(bar, text="刪除", style=f"{self.key}.Ghost.TButton", command=self.delete))
+        bar.add(ttk.Button(bar, text="標註回原位", style=f"{self.key}.Small.TButton", command=self.reset_positions),
+                side="right")
+        bar.add(ttk.Button(bar, text="恢復預設", style=f"{self.key}.Small.TButton", command=self.reset), side="right")
+
+        # 下面的編輯區、提示先排（視窗矮的時候被壓縮的是上面的清單，不是編輯區）
+        self.hint = tk.Label(self, text="", bg=T.CARD, fg=T.MUTED, font=T.font(9), anchor="w", justify="left")
+        self.hint.pack(side="bottom", fill="x", padx=12, pady=(0, 8))
+        fit_label(self.hint)
+        self._build_editor()
 
         tf = tk.Frame(self, bg=T.CARD)
         tf.pack(fill="both", expand=True, padx=12)
-        self.tree = ttk.Treeview(tf, columns=[c for c, _, _ in COLS], show="headings", selectmode="browse", height=8)
+        self.tree = ttk.Treeview(tf, columns=[c for c, _, _ in COLS], show="headings", selectmode="browse", height=5)
         for c, text, w in COLS:
             self.tree.heading(c, text=text)
             self.tree.column(c, width=T.px(w), stretch=c in ("text", "font"), anchor="w" if c in ("text", "font") else "center")
@@ -87,9 +95,6 @@ class PeakLabelDialog(tk.Toplevel):
         self.tree.bind("<<TreeviewSelect>>", lambda e: self._load_selected())
         self.tree.bind("<Double-1>", lambda e: self.w_text.focus_set())
 
-        self._build_editor()
-        self.hint = tk.Label(self, text="", bg=T.CARD, fg=T.MUTED, font=T.font(9), anchor="w")
-        self.hint.pack(fill="x", padx=12, pady=(0, 8))
         self.protocol("WM_DELETE_WINDOW", self.close)
         self.refresh_tree()
         kids = self.tree.get_children()
@@ -100,26 +105,36 @@ class PeakLabelDialog(tk.Toplevel):
     def _build_editor(self):
         box = tk.LabelFrame(self, text=" 選到的標註 ", bg=T.CARD, fg=T.MUTED, font=T.font(9, "bold"), bd=1,
                             relief="solid", highlightthickness=0)
-        box.pack(fill="x", padx=12, pady=8)
-        g = tk.Frame(box, bg=T.CARD)
-        g.pack(fill="x", padx=8, pady=6)
+        box.pack(side="bottom", fill="x", padx=12, pady=8)
         self.v = {k: tk.StringVar() for k in ("text", "x", "follow", "size", "font", "color")}
         self.b = {k: tk.BooleanVar() for k in ("show", "pos", "bold", "italic", "always")}
+        C = T.CARD
 
-        def lab(r, c, text):
-            tk.Label(g, text=text, bg=T.CARD, fg=T.MUTED, font=T.font(9)).grid(row=r, column=c, sticky="w", padx=(0, 4),
-                                                                                pady=3)
-        lab(0, 0, "文字")
-        self.w_text = ttk.Entry(g, textvariable=self.v["text"], width=18)
-        self.w_text.grid(row=0, column=1, sticky="ew")
-        lab(0, 2, "位置 (cm⁻¹)")
-        ttk.Entry(g, textvariable=self.v["x"], width=8).grid(row=0, column=3, sticky="w")
-        lab(0, 4, "跟隨擬合")
-        ttk.Combobox(g, textvariable=self.v["follow"], values=L.FOLLOW, state="readonly", width=12).grid(
-            row=0, column=5, sticky="w")
-        lab(1, 0, "顏色")
-        cf = tk.Frame(g, bg=T.CARD)
-        cf.grid(row=1, column=1, columnspan=3, sticky="w")
+        def row(pady=(3, 0)):
+            r = WrapRow(box, bg=C, padx=12)
+            r.pack(fill="x", padx=8, pady=pady)
+            return r
+
+        def group(r, text):
+            """「標題 + 欄位」綁成一組：視窗變窄時整組換行，不會標題和欄位分家。"""
+            f = tk.Frame(r, bg=C)
+            tk.Label(f, text=text, bg=C, fg=T.MUTED, font=T.font(9)).pack(side="left", padx=(0, 4))
+            return f
+
+        r = row((6, 0))
+        f = group(r, "文字")
+        self.w_text = ttk.Entry(f, textvariable=self.v["text"], width=18)
+        self.w_text.pack(side="left", fill="x", expand=True)
+        r.add(f, expand=True, padx=0)
+        f = group(r, "位置 (cm⁻¹)")
+        ttk.Entry(f, textvariable=self.v["x"], width=8).pack(side="left")
+        r.add(f)
+        f = group(r, "跟隨擬合")
+        ttk.Combobox(f, textvariable=self.v["follow"], values=L.FOLLOW, state="readonly", width=12).pack(side="left")
+        r.add(f)
+
+        r = row()
+        cf = group(r, "顏色")
         self.swatch = tk.Label(cf, text="　　", bg="#374151", relief="solid", bd=1, cursor="hand2")
         self.swatch.pack(side="left")
         self.swatch.bind("<Button-1>", lambda e: self.choose_color())
@@ -128,25 +143,25 @@ class PeakLabelDialog(tk.Toplevel):
             sw.pack(side="left", padx=1)
             sw.bind("<Button-1>", lambda e, c=c: self.v["color"].set(c))
         ttk.Button(cf, text="其他…", style=f"{self.key}.Small.TButton", command=self.choose_color).pack(side="left", padx=4)
-        lab(1, 4, "大小")
-        ttk.Spinbox(g, from_=5, to=40, increment=1, textvariable=self.v["size"], width=5).grid(row=1, column=5, sticky="w")
-        lab(2, 0, "字型")
-        ttk.Combobox(g, textvariable=self.v["font"], values=font_choices(), width=22).grid(row=2, column=1, columnspan=3,
-                                                                                         sticky="w")
-        cb = tk.Frame(g, bg=T.CARD)
-        cb.grid(row=2, column=4, columnspan=2, sticky="w")
+        r.add(cf, padx=0)
+        f = group(r, "大小")
+        ttk.Spinbox(f, from_=5, to=40, increment=1, textvariable=self.v["size"], width=5).pack(side="left")
+        r.add(f)
+
+        r = row()
+        f = group(r, "字型")
+        ttk.Combobox(f, textvariable=self.v["font"], values=font_choices(), width=22).pack(side="left")
+        r.add(f, padx=0)
         for k, text in (("bold", "粗體"), ("italic", "斜體")):
-            ttk.Checkbutton(cb, text=text, variable=self.b[k], style=f"{self.key}.TCheckbutton").pack(side="left", padx=2)
-        cb2 = tk.Frame(g, bg=T.CARD)
-        cb2.grid(row=3, column=0, columnspan=6, sticky="w", pady=(4, 0))
-        ttk.Checkbutton(cb2, text="顯示", variable=self.b["show"], style=f"{self.key}.TCheckbutton").pack(side="left")
-        ttk.Checkbutton(cb2, text="文字下面加峰位數值", variable=self.b["pos"], style=f"{self.key}.TCheckbutton").pack(
-            side="left", padx=10)
-        ttk.Checkbutton(cb2, text="沒有擬合時也標在「位置」", variable=self.b["always"],
-                        style=f"{self.key}.TCheckbutton").pack(side="left")
-        ttk.Button(cb2, text="這個樣式套用到全部標註（大小、字型、粗斜體）", style=f"{self.key}.Small.TButton",
-                   command=self.style_to_all).pack(side="right")
-        g.columnconfigure(1, weight=1)
+            r.add(ttk.Checkbutton(r, text=text, variable=self.b[k], style=f"{self.key}.TCheckbutton"))
+
+        r = row((6, 6))
+        r.add(ttk.Checkbutton(r, text="顯示", variable=self.b["show"], style=f"{self.key}.TCheckbutton"), padx=0)
+        r.add(ttk.Checkbutton(r, text="文字下面加峰位數值", variable=self.b["pos"], style=f"{self.key}.TCheckbutton"))
+        r.add(ttk.Checkbutton(r, text="沒有擬合時也標在「位置」", variable=self.b["always"],
+                              style=f"{self.key}.TCheckbutton"))
+        r.add(ttk.Button(r, text="這個樣式套用到全部標註（大小、字型、粗斜體）", style=f"{self.key}.Small.TButton",
+                         command=self.style_to_all), side="right")
         for var in list(self.v.values()) + list(self.b.values()):
             var.trace_add("write", lambda *a: self._edited())
 

@@ -217,6 +217,14 @@ class WrapRow(tk.Frame):
         for w, (full, short) in comp.items():
             try:
                 w.configure(text=short if on else full)
+                if w.winfo_class() == "TButton":
+                    # ttk 按鈕有預設最小寬度（約 11 個字），只換文字不會變窄：只顯示圖示時把最小寬度拿掉
+                    if on:
+                        if not hasattr(w, "_full_width"):
+                            w._full_width = w.cget("width")
+                        w.configure(width=-1)
+                    elif hasattr(w, "_full_width"):
+                        w.configure(width=w._full_width)
             except tk.TclError:
                 pass
 

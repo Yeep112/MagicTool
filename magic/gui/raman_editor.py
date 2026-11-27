@@ -32,7 +32,7 @@ from ..raman.spikes import find_spikes
 from ..readers import load
 from ..readers.raman_txt import xy
 from . import theme as T
-from .widgets import Paned, keep_figure_fit
+from .widgets import Paned, WrapRow, fit_label, keep_figure_fit
 
 MODES = [("view", "🔍 縮放 / 平移"), ("brush", "⌫ 橡皮擦（點 / 塗抹）"), ("erase", "⬚ 橡皮擦（框選）"),
          ("restore", "↺ 還原筆（框選）"), ("anchor", "✚ 背景錨點")]
@@ -76,8 +76,10 @@ class RamanEditor(tk.Toplevel):
         head = tk.Frame(self, bg=a["main"], padx=16, pady=8)
         head.pack(fill="x")
         tk.Label(head, text="✎ 編修光譜", bg=a["main"], fg="white", font=T.font(13, "bold")).pack(side="left")
-        tk.Label(head, text="　擦掉雜訊點、手動定義背景；只影響顯示與分析，原始檔不會被修改，隨時可以復原",
-                 bg=a["main"], fg=T.mix_color("#ffffff", a["main"], 0.25), font=T.font(9)).pack(side="left")
+        sub = tk.Label(head, text="　擦掉雜訊點、手動定義背景；只影響顯示與分析，原始檔不會被修改，隨時可以復原",
+                       bg=a["main"], fg=T.mix_color("#ffffff", a["main"], 0.25), font=T.font(9), justify="left")
+        sub.pack(side="left", fill="x", expand=True)
+        fit_label(sub)
 
         bottom = tk.Frame(self, bg=T.SUBTLE, highlightthickness=1, highlightbackground=T.BORDER)
         bottom.pack(side="bottom", fill="x")
@@ -142,56 +144,80 @@ class RamanEditor(tk.Toplevel):
     def _build_tools(self, parent):
         bar = tk.Frame(parent, bg=T.SUBTLE, highlightthickness=1, highlightbackground=T.BORDER)
         bar.pack(fill="x")
-        r1 = tk.Frame(bar, bg=T.SUBTLE)
-        r1.pack(fill="x", pady=(4, 2))
-        r2 = tk.Frame(bar, bg=T.SUBTLE)
-        r2.pack(fill="x", pady=(2, 4))
+        S = T.SUBTLE
+
+        def group(row, *parts):
+            """幾個元件綁成一組（換行時不會被拆開，例如「筆刷大小 [10] px」）。"""
+            f = tk.Frame(row, bg=S)
+            for build in parts:
+                build(f).pack(side="left")
+            return f
+
+        def lab(text, size=9, fg=None, bold=False):
+            return lambda f: tk.Label(f, text=text, bg=S, fg=fg or T.MUTED, font=T.font(size, "bold" if bold else None))
+
+        # ---- 工具
+        r1 = WrapRow(bar, bg=S, padx=6)
+        r1.pack(fill="x", padx=8, pady=(4, 2))
         self.mode_var = tk.StringVar(value="brush")
-        tk.Label(r1, text="工具", bg=T.SUBTLE, fg=T.MUTED, font=T.font(9, "bold")).pack(side="left", padx=(8, 6))
+        r1.add(lab("工具", bold=True)(r1), padx=0)
         for k, text in MODES:
-            ttk.Radiobutton(r1, text=text, value=k, variable=self.mode_var, style=f"{self.key}.TRadiobutton",
-                            command=lambda k=k: self.set_mode(k)).pack(side="left", padx=4)
+            r1.add(ttk.Radiobutton(r1, text=text, value=k, variable=self.mode_var, style=f"{self.key}.TRadiobutton",
+                                   command=lambda k=k: self.set_mode(k)))
+        self.brush_var = tk.StringVar(value="10")
+        r1.add(group(r1, lab("筆刷大小"),
+                     lambda f: ttk.Spinbox(f, from_=2, to=60, increment=2, textvariable=self.brush_var, width=3),
+                     lab(" px")), padx=10)
         self.undo_btn = ttk.Button(r1, text="↶ 復原", style=f"{self.key}.Small.TButton", command=self.undo)
         self.redo_btn = ttk.Button(r1, text="↷ 重做", style=f"{self.key}.Small.TButton", command=self.redo)
-        self.redo_btn.pack(side="right", padx=(2, 8))
-        self.undo_btn.pack(side="right", padx=2)
-        self.brush_var = tk.StringVar(value="10")
-        tk.Label(r1, text="px", bg=T.SUBTLE, fg=T.MUTED, font=T.font(9)).pack(side="right", padx=(2, 10))
-        ttk.Spinbox(r1, from_=2, to=60, increment=2, textvariable=self.brush_var, width=3).pack(side="right")
-        tk.Label(r1, text="筆刷大小", bg=T.SUBTLE, fg=T.MUTED, font=T.font(9)).pack(side="right", padx=(10, 2))
-        tk.Label(r2, text="背景", bg=T.SUBTLE, fg=T.MUTED, font=T.font(9, "bold")).pack(side="left", padx=(8, 6))
-        tk.Label(r2, text="錨點之間", bg=T.SUBTLE, fg=T.MUTED, font=T.font(9)).pack(side="left")
+        r1.add(self.undo_btn, side="right", padx=4)
+        r1.add(self.redo_btn, side="right", padx=4)
+
+        # ---- 背景
+        r2 = WrapRow(bar, bg=S, padx=6)
+        r2.pack(fill="x", padx=8, pady=2)
+        r2.add(lab("背景", bold=True)(r2), padx=0)
         self.interp_var = tk.StringVar(value=E.INTERPS[0])
-        cb = ttk.Combobox(r2, textvariable=self.interp_var, values=E.INTERPS, state="readonly", width=5)
-        cb.pack(side="left", padx=(2, 8))
-        cb.bind("<<ComboboxSelected>>", lambda e: self._set_interp())
+        holder = {}
+
+        def combo(f):
+            cb = ttk.Combobox(f, textvariable=self.interp_var, values=E.INTERPS, state="readonly", width=5)
+            cb.bind("<<ComboboxSelected>>", lambda e: self._set_interp())
+            holder["cb"] = cb
+            return cb
+        r2.add(group(r2, lab("錨點之間 "), combo))
         self.snap_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(r2, text="貼齊光譜", variable=self.snap_var, style=f"{self.key}.TCheckbutton").pack(side="left")
-        tk.Label(r2, text="自動放", bg=T.SUBTLE, fg=T.MUTED, font=T.font(9)).pack(side="left", padx=(10, 2))
+        r2.add(ttk.Checkbutton(r2, text="貼齊光譜", variable=self.snap_var, style=f"{self.key}.TCheckbutton"))
         self.n_auto = tk.StringVar(value="8")
-        ttk.Spinbox(r2, from_=2, to=40, textvariable=self.n_auto, width=3).pack(side="left")
-        ttk.Button(r2, text="個錨點（沿 ALS 背景）", style=f"{self.key}.Small.TButton", command=self.auto_anchors).pack(
-            side="left", padx=(2, 8))
-        ttk.Button(r2, text="清除錨點", style=f"{self.key}.Small.TButton",
-                   command=lambda: self.clear("anchors")).pack(side="right", padx=(2, 8))
-        ttk.Button(r2, text="還原所有擦掉的點", style=f"{self.key}.Small.TButton",
-                   command=lambda: self.clear("erase")).pack(side="right", padx=2)
-        r3 = tk.Frame(bar, bg=T.SUBTLE)
-        r3.pack(fill="x", pady=(0, 4))
-        tk.Label(r3, text="尖峰", bg=T.SUBTLE, fg=T.MUTED, font=T.font(9, "bold")).pack(side="left", padx=(8, 6))
-        ttk.Button(r3, text="🔍 找尖峰（宇宙射線）", style=f"{self.key}.Small.TButton",
-                   command=self.find_spikes).pack(side="left")
-        tk.Label(r3, text="靈敏度", bg=T.SUBTLE, fg=T.MUTED, font=T.font(9)).pack(side="left", padx=(10, 2))
+        r2.add(group(r2, lab("自動放 "),
+                     lambda f: ttk.Spinbox(f, from_=2, to=40, textvariable=self.n_auto, width=3),
+                     lambda f: ttk.Button(f, text="個錨點（沿 ALS 背景）", style=f"{self.key}.Small.TButton",
+                                          command=self.auto_anchors)), padx=10)
+        r2.add(ttk.Button(r2, text="還原所有擦掉的點", style=f"{self.key}.Small.TButton",
+                          command=lambda: self.clear("erase")), side="right", padx=4)
+        r2.add(ttk.Button(r2, text="清除錨點", style=f"{self.key}.Small.TButton",
+                          command=lambda: self.clear("anchors")), side="right", padx=4)
+
+        # ---- 尖峰
+        r3 = WrapRow(bar, bg=S, padx=6)
+        r3.pack(fill="x", padx=8, pady=(2, 4))
+        self.spike_row = r3
+        r3.add(lab("尖峰", bold=True)(r3), padx=0)
+        r3.add(ttk.Button(r3, text="🔍 找尖峰（宇宙射線）", style=f"{self.key}.Small.TButton", command=self.find_spikes))
         self.spike_k = tk.StringVar(value="6")
-        ttk.Spinbox(r3, from_=3, to=15, increment=0.5, textvariable=self.spike_k, width=4).pack(side="left")
-        tk.Label(r3, text="（越小越敏感）　最多", bg=T.SUBTLE, fg=T.FAINT, font=T.font(8)).pack(side="left", padx=(2, 2))
         self.spike_w = tk.StringVar(value="3")
-        ttk.Spinbox(r3, from_=1, to=5, textvariable=self.spike_w, width=2).pack(side="left")
-        tk.Label(r3, text="個點寬", bg=T.SUBTLE, fg=T.FAINT, font=T.font(8)).pack(side="left", padx=(2, 10))
-        self.spike_lab = tk.Label(r3, text="", bg=T.SUBTLE, fg=T.TEXT, font=T.font(9))
-        self.spike_lab.pack(side="left")
-        self.spike_cancel = ttk.Button(r3, text="取消", style=f"{self.key}.Small.TButton", command=self.cancel_spikes)
+        r3.add(group(r3, lab("靈敏度 "),
+                     lambda f: ttk.Spinbox(f, from_=3, to=15, increment=0.5, textvariable=self.spike_k, width=4),
+                     lab("（越小越敏感）", 8, T.FAINT)), padx=10)
+        r3.add(group(r3, lab("最多 ", 8, T.FAINT),
+                     lambda f: ttk.Spinbox(f, from_=1, to=5, textvariable=self.spike_w, width=2),
+                     lab(" 個點寬", 8, T.FAINT)))
+        self.spike_lab = tk.Label(r3, text="", bg=S, fg=T.TEXT, font=T.font(9))
         self.spike_erase = ttk.Button(r3, text="", style=f"{self.key}.Accent.TButton", command=self.erase_spikes)
+        self.spike_cancel = ttk.Button(r3, text="取消", style=f"{self.key}.Small.TButton", command=self.cancel_spikes)
+        for w in (self.spike_lab, self.spike_erase, self.spike_cancel):
+            r3.add(w, padx=8)
+            r3.set_visible(w, False)
 
     def _build_figure(self, parent):
         holder = tk.Frame(parent, bg=T.CARD)
@@ -664,12 +690,14 @@ class RamanEditor(tk.Toplevel):
         if n_spikes:
             self.spike_lab.configure(text=f"找到 {n_spikes} 個（{n_points} 點，紅圈）")
             self.spike_erase.configure(text=f"⌫ 擦掉這 {n_spikes} 個")
-            self.spike_erase.pack(side="left", padx=(8, 4))
-            self.spike_cancel.pack(side="left")
+            for w in (self.spike_lab, self.spike_erase, self.spike_cancel):
+                self.spike_row.set_visible(w, True)
+            self.spike_row._plan = None
+            self.spike_row._relayout()
         else:
             self.spike_lab.configure(text="")
-            self.spike_erase.pack_forget()
-            self.spike_cancel.pack_forget()
+            for w in (self.spike_lab, self.spike_erase, self.spike_cancel):
+                self.spike_row.set_visible(w, False)
 
     def erase_spikes(self):
         if self.spikes is None or not self.spikes.any():
