@@ -343,7 +343,23 @@ def write_samples(folder):
         for k, img in enumerate(imgs):
             _png(j(s901, name, img), (100 + 20 * k, 90, 200))
     os.makedirs(j(s901, "00 Design", "digitalize"), exist_ok=True)
-    _write(j(s901, "00 Design", "digitalize", "graphene.csv"), "x,Curve1\n0,0\n10,0\n10,8\n0,8\n")
+    import math as _m
+
+    def _blob(cx, cy, rx, ry, rot=0.0, wob=0.08, n=48, seed=1):
+        pts = []
+        for k in range(n):
+            a = 2 * _m.pi * k / n
+            r = 1 + wob * _m.sin(3 * a + seed) + 0.5 * wob * _m.cos(5 * a + 2 * seed)
+            x, y = rx * r * _m.cos(a), ry * r * _m.sin(a)
+            pts.append((cx + x * _m.cos(rot) - y * _m.sin(rot), cy + x * _m.sin(rot) + y * _m.cos(rot)))
+        pts.append(pts[0])
+        return "x,Curve1\n" + "".join(f"{x:.4f},{y:.4f}\n" for x, y in pts)
+    dg = j(s901, "00 Design", "digitalize")
+    _write(j(dg, "hBN.csv"), _blob(4046, 4948, 9, 6, 0.3, seed=1))           # 下層 hBN（合成的輪廓）
+    _write(j(dg, "Ta.csv"), _blob(4046.5, 4948.2, 5.5, 2.2, 0.55, seed=2))  # TaS2
+    _write(j(dg, "graphene.csv"), _blob(4045, 4947, 3.0, 1.4, 0.2, seed=3))
+    _write(j(dg, "thBN.csv"), _blob(4046.2, 4948.5, 7.5, 5, -0.2, seed=4))  # 上層 hBN
+    _write(j(dg, "contact.csv"), "x,Curve1\n4041,4946\n4043,4946.5\n4043,4947.5\n4041,4947\n4041,4946\n")
     with open(j(s901, "19 Measurement", "Demo 901_2025-10-13_01.db"), "wb") as f:
         f.write(b"SQLite format 3\x00")
     raman(j(s901, "19 Measurement", "synthetic_901_raman.txt"), "monolayer")

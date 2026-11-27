@@ -159,11 +159,11 @@ class StepEditor(_Dialog):
         tk.Label(top, text="～", bg=T.CARD, fg=T.MUTED).pack(side="left")
         ttk.Entry(top, textvariable=self.d2, width=11).pack(side="left", padx=(2, 4))
         tk.Label(top, text="（結束日可以空白）", bg=T.CARD, fg=T.FAINT, font=T.font(8)).pack(side="left")
+        bf = tk.Frame(self, bg=T.CARD)
+        bf.pack(side="bottom", fill="x", pady=(10, 0))
         self.sf = ScrollFrame(self)
         self.sf.pack(fill="both", expand=True, pady=(10, 0))
         self.body = self.sf.body
-        bf = tk.Frame(self, bg=T.CARD)
-        bf.pack(fill="x", pady=(10, 0))
         ttk.Button(bf, text="取消", style=f"{KEY}.Ghost.TButton", command=self.destroy).pack(side="right")
         ttk.Button(bf, text="儲存", style=f"{KEY}.Accent.TButton", command=self.save).pack(side="right", padx=(0, 6))
         self.err = tk.Label(bf, text="", bg=T.CARD, fg=T.ERROR, font=T.font(9), anchor="w", justify="left",
@@ -651,3 +651,210 @@ class SyncDialog(_Dialog):
                 msg = f"✗ {e}"
             self.page.app.post(("call", lambda: self.winfo_exists() and self.refresh(msg)))
         self.page.app.submit(work)
+
+
+class ExportDialog(_Dialog):
+    """📤 匯出 PPT：選樣品（一顆或多顆比較）、語言、要放哪些段落；目前樣品的模板（標題、每一步放不放、給教授的說明）。"""
+
+    def __init__(self, page):
+        from ..fab import report_ppt as RP
+        super().__init__(page.app.root)
+        self.page, self.RP = page, RP
+        self.title("匯出 PPT")
+        self.configure(bg=T.CARD, padx=14, pady=12)
+        self.transient(page.app.root)
+        self.geometry(f"{T.px(980)}x{T.px(660)}")
+        self.minsize(T.px(760), T.px(520))
+        tk.Label(self, text="📤 一鍵匯出 PPT", bg=T.CARD, fg=T.TEXT, font=T.font(13, "bold"), anchor="w").pack(fill="x")
+        tk.Label(self, text="選一顆 = 單一樣品報告；選好幾顆 = 同一份裡比較（Ctrl / Shift 多選）。模板會存在每顆樣品的紀錄檔，下次匯出沿用。",
+                 bg=T.CARD, fg=T.MUTED, font=T.font(9), anchor="w").pack(fill="x", pady=(2, 8))
+        # ---- 下（先放：視窗太矮時按鈕不會被擠掉）
+        bf = tk.Frame(self, bg=T.CARD)
+        bf.pack(side="bottom", fill="x", pady=(6, 0))
+        ttk.Button(bf, text="關閉", style=f"{KEY}.Ghost.TButton", command=self.destroy).pack(side="right")
+        self.go = ttk.Button(bf, text="📤 匯出 PPT", style=f"{KEY}.Accent.TButton", command=self.export)
+        self.go.pack(side="right", padx=(0, 6))
+        ttk.Button(bf, text="儲存模板", style=f"{KEY}.Small.TButton", command=self.save_tpl).pack(side="left")
+        self.info = tk.Label(self, text="", bg=T.CARD, fg=T.MUTED, font=T.font(9), anchor="w", justify="left",
+                             wraplength=T.px(900))
+        self.info.pack(side="bottom", fill="x", pady=(8, 0))
+        body = tk.Frame(self, bg=T.CARD)
+        body.pack(fill="both", expand=True)
+        # ---- 左：樣品、語言、段落
+        left = tk.Frame(body, bg=T.CARD)
+        left.pack(side="left", fill="y")
+        tk.Label(left, text="樣品", bg=T.CARD, fg=T.TEXT, font=T.font(10, "bold"), anchor="w").pack(fill="x")
+        self.samples = list(page.lib.samples if page.lib else [])
+        self.slist = tk.Listbox(left, selectmode="extended", height=10, width=22, exportselection=False, bd=0,
+                                highlightthickness=1, highlightbackground=T.BORDER, font=T.font(10), activestyle="none",
+                                selectbackground=T.mix_color(T.accent(KEY)["main"], "#ffffff", 0.7), selectforeground=T.TEXT)
+        for x in self.samples:
+            self.slist.insert("end", x["label"] + ("" if x.get("rec") is not None else "（初版）"))
+        if page.sample in self.samples:
+            i = self.samples.index(page.sample)
+            self.slist.selection_set(i)
+            self.slist.see(i)
+        self.slist.pack(fill="x")
+        self.slist.bind("<<ListboxSelect>>", lambda e: self._load_tpl())
+        tk.Label(left, text="語言", bg=T.CARD, fg=T.TEXT, font=T.font(10, "bold"), anchor="w").pack(fill="x", pady=(10, 0))
+        self.lang = tk.StringVar(value=page.st.get("ppt_lang", "zh"))
+        for code, name in RP.LANGS:
+            ttk.Radiobutton(left, text=name, value=code, variable=self.lang, style=f"{KEY}.TRadiobutton").pack(anchor="w")
+        tk.Label(left, text="要放的內容", bg=T.CARD, fg=T.TEXT, font=T.font(10, "bold"), anchor="w").pack(fill="x",
+                                                                                                    pady=(10, 0))
+        saved = set(page.st.get("ppt_sections") or RP.DEFAULT_ON)
+        self.sec = {}
+        for k, zh, en in RP.SECTIONS:
+            v = tk.BooleanVar(value=k in saved)
+            self.sec[k] = v
+            ttk.Checkbutton(left, text=zh, variable=v, style=f"{KEY}.TCheckbutton").pack(anchor="w")
+        # ---- 右：模板
+        right = tk.Frame(body, bg=T.CARD)
+        right.pack(side="left", fill="both", expand=True, padx=(16, 0))
+        self.tpl_head = tk.Label(right, text="", bg=T.CARD, fg=T.TEXT, font=T.font(11, "bold"), anchor="w")
+        self.tpl_head.pack(fill="x")
+        g = tk.Frame(right, bg=T.CARD)
+        g.pack(fill="x", pady=(4, 6))
+        self.t_title = tk.StringVar()
+        self.t_sub = tk.StringVar()
+        for r, (lab, var, hint) in enumerate((("標題", self.t_title, "空白 = 「樣品 102 製程報告」"),
+                                              ("副標題", self.t_sub, "空白 = 類型 · 使用者"))):
+            tk.Label(g, text=lab, bg=T.CARD, fg=T.TEXT, font=T.font(10)).grid(row=r, column=0, sticky="w")
+            ttk.Entry(g, textvariable=var, width=48).grid(row=r, column=1, sticky="we", pady=1)
+            tk.Label(g, text=hint, bg=T.CARD, fg=T.FAINT, font=T.font(8)).grid(row=r, column=2, sticky="w", padx=(6, 0))
+        g.columnconfigure(1, weight=1)
+        tk.Label(right, text="每一步：點「放」那一欄切換要不要放進 PPT；選一步可以寫給教授看的說明", bg=T.CARD, fg=T.MUTED,
+                 font=T.font(9), anchor="w").pack(fill="x")
+        tf = tk.Frame(right, bg=T.CARD)
+        tf.pack(fill="both", expand=True, pady=(4, 0))
+        self.steps = ttk.Treeview(tf, columns=("on", "step", "date", "note"), show="headings", selectmode="browse",
+                                  style=f"{KEY}.Treeview", height=9)
+        for c, t, w in (("on", "放", 36), ("step", "步驟", 150), ("date", "日期", 96), ("note", "說明", 260)):
+            self.steps.heading(c, text=t)
+            self.steps.column(c, width=T.px(w), anchor="center" if c == "on" else "w", stretch=c == "note")
+        sb = ttk.Scrollbar(tf, orient="vertical", command=self.steps.yview)
+        self.steps.configure(yscrollcommand=sb.set)
+        self.steps.pack(side="left", fill="both", expand=True)
+        sb.pack(side="right", fill="y")
+        self.steps.bind("<ButtonRelease-1>", self._click)
+        self.steps.bind("<<TreeviewSelect>>", lambda e: self._show_note())
+        self.note = tk.Text(right, height=3, font=T.font(10), bd=0, highlightthickness=1, highlightbackground=T.BORDER,
+                            wrap="word")
+        self.note.pack(fill="x", pady=(6, 0))
+        self.note.bind("<KeyRelease>", lambda e: self._note_changed())
+        self.cur = None
+        self.tpl = None
+        self._load_tpl()
+
+    def selected(self):
+        return [self.samples[i] for i in self.slist.curselection()]
+
+    def _load_tpl(self):
+        self._stash()
+        sel = self.selected()
+        self.cur = sel[0] if sel else None
+        self.steps.delete(*self.steps.get_children())
+        self.note.delete("1.0", "end")
+        if not self.cur:
+            self.tpl_head.configure(text="模板（先選樣品）")
+            return
+        rec = self.page.record(self.cur)
+        self.tpl = self.RP.template(rec)
+        if "skip_steps" not in (rec.get("ppt") or {}):
+            self.tpl["skip_steps"] = self.RP.default_skip(rec)
+        self.tpl_head.configure(text=f"模板：{self.cur['label']}" + (f"（另外選了 {len(sel) - 1} 顆，各自用自己的模板）"
+                                                                    if len(sel) > 1 else ""))
+        self.t_title.set(self.tpl["title"])
+        self.t_sub.set(self.tpl["subtitle"])
+        for st in rec.get("steps", []):
+            self.steps.insert("", "end", iid=st["id"], values=(
+                "—" if st["id"] in self.tpl["skip_steps"] else "✓", K.step_name(st),
+                (st.get("date") or "").replace("-", "/"), self.tpl["step_notes"].get(st["id"], "")))
+
+    def _stash(self):
+        """切換樣品前，把正在編輯的模板記在記憶體（按「儲存模板」或匯出時才寫檔）。"""
+        if self.cur is not None and self.tpl is not None:
+            self.tpl["title"] = self.t_title.get().strip()
+            self.tpl["subtitle"] = self.t_sub.get().strip()
+            self.page.ppt_drafts[self.cur["key"]] = dict(self.tpl)
+
+    def _click(self, e):
+        if self.steps.identify_column(e.x) != "#1":
+            return
+        iid = self.steps.identify_row(e.y)
+        if iid:
+            self.toggle(iid)
+
+    def toggle(self, sid):
+        sk = self.tpl["skip_steps"]
+        if sid in sk:
+            sk.remove(sid)
+        else:
+            sk.append(sid)
+        self.steps.set(sid, "on", "—" if sid in sk else "✓")
+
+    def _show_note(self):
+        sel = self.steps.selection()
+        self.note.delete("1.0", "end")
+        if sel:
+            self.note.insert("1.0", self.tpl["step_notes"].get(sel[0], ""))
+
+    def _note_changed(self):
+        sel = self.steps.selection()
+        if not sel:
+            return
+        t = self.note.get("1.0", "end").strip()
+        if t:
+            self.tpl["step_notes"][sel[0]] = t
+        else:
+            self.tpl["step_notes"].pop(sel[0], None)
+        self.steps.set(sel[0], "note", t.replace("\n", " "))
+
+    def save_tpl(self, quiet=False):
+        self._stash()
+        n = 0
+        for key, tpl in list(self.page.ppt_drafts.items()):
+            s = next((x for x in self.samples if x["key"] == key), None)
+            if s:
+                self.page.save_template(s, tpl)
+                n += 1
+        self.page.ppt_drafts.clear()
+        if not quiet:
+            self.info.configure(text=f"已儲存 {n} 顆樣品的模板（存在各自的紀錄檔）", fg=T.SUCCESS)
+        return n
+
+    def export(self, path=None):
+        sel = self.selected()
+        if not sel:
+            self.info.configure(text="先選樣品", fg=T.ERROR)
+            return None
+        self.save_tpl(quiet=True)
+        sections = [k for k, v in self.sec.items() if v.get()]
+        lang = self.lang.get()
+        self.page.st["ppt_lang"] = lang
+        self.page.st["ppt_sections"] = sections
+        if path is None:
+            from tkinter import filedialog
+            if len(sel) == 1:
+                name = f"{sel[0]['label']}_製程報告.pptx"
+                where = sel[0]["dir"] or os.path.expanduser("~")
+            else:
+                name = "樣品比較_" + "_".join(x["label"] for x in sel[:6]) + ".pptx"
+                where = os.path.expanduser("~")
+            path = filedialog.asksaveasfilename(parent=self, initialdir=where, initialfile=name, defaultextension=".pptx",
+                                                filetypes=[("PowerPoint", "*.pptx")])
+            if not path:
+                return None
+        self.go.state(["disabled"])
+        self.info.configure(text="匯出中…（照片會縮小後放進去）", fg=T.TEXT)
+        self.page.export_ppt(sel, path, lang, sections, done=self._done)
+        return path
+
+    def _done(self, path, n, err):
+        if not self.winfo_exists():
+            return
+        self.go.state(["!disabled"])
+        if err:
+            self.info.configure(text=f"匯出失敗：{err}", fg=T.ERROR)
+        else:
+            self.info.configure(text=f"✓ 已匯出 {n} 頁：{path}", fg=T.SUCCESS)
