@@ -54,7 +54,7 @@ class EtchWizard(tk.Toplevel):
         except Exception:
             sw, sh = 1600, 1000
         self.geometry(f"{min(T.px(1360), sw - 60)}x{min(T.px(900), sh - 80)}")
-        self.minsize(980, 640)
+        self.minsize(min(T.px(980), sw - 60), min(T.px(640), sh - 100))   # 介面縮放時跟著放大
         self.vars = {}
         self.widgets = {}
         self.labels_text = {}

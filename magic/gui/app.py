@@ -90,6 +90,16 @@ def drain_variable_trash():
     return len(items)
 
 
+def min_window(sw, sh):
+    """主視窗最小大小：100% 時 1100×680，介面縮放（125%、150%）時跟著放大（不超過螢幕）。"""
+    return min(T.px(1100), sw - 40), min(T.px(680), sh - 80)
+
+
+def default_window(sw, sh):
+    """主視窗開啟時的大小。"""
+    return min(T.px(1600), sw - 40), min(T.px(940), sh - 80)
+
+
 class App:
     UPDATE_INTERVAL_MS = 30 * 60 * 1000
 
@@ -128,8 +138,8 @@ class App:
             sw, sh = int(root.winfo_screenwidth()), int(root.winfo_screenheight())
         except Exception:
             sw, sh = 1920, 1080
-        root.geometry(f"{min(T.px(1600), sw - 40)}x{min(T.px(940), sh - 80)}")
-        root.minsize(1100, 680)
+        root.geometry("%dx%d" % default_window(sw, sh))
+        root.minsize(*min_window(sw, sh))           # 介面縮放（125%、150%）時最小視窗跟著放大，版面比例不變
         root.configure(bg=T.BG)
         self._build()
         keys = [SAMPLES] + list(INSTRUMENTS)

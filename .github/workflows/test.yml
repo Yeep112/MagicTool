@@ -60,6 +60,15 @@ jobs:
         if: runner.os == 'Linux'
         run: xvfb-run -a -s "-screen 0 1920x1080x24" python -m magic selftest --release
 
+      # 你的筆電有開螢幕縮放（125%、150%）：字和元件都會放大，排版要另外看一次
+      - name: 自我測試 - 螢幕縮放 125%
+        if: always() && runner.os == 'Linux'
+        run: xvfb-run -a -s "-screen 0 1920x1080x24 -dpi 120" python -m magic selftest --release
+
+      - name: 自我測試 - 螢幕縮放 150%
+        if: always() && runner.os == 'Linux'
+        run: xvfb-run -a -s "-screen 0 1920x1080x24 -dpi 144" python -m magic selftest --release
+
       - name: 繁體中文 Windows 編碼（cp950 模擬）
         # 從捷徑直接開 MagicTool.pyw 時沒有 UTF-8 模式，讀寫檔案沒寫 encoding 就會用 cp950。
         # tests/cp950/sitecustomize.py 把預設編碼換成 cp950，再跑一次 pytest 與不開視窗的自我測試。

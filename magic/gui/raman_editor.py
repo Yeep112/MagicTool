@@ -61,7 +61,7 @@ class RamanEditor(tk.Toplevel):
         except Exception:
             sw, sh = 1600, 1000
         self.geometry(f"{min(T.px(1320), sw - 60)}x{min(T.px(860), sh - 80)}")
-        self.minsize(900, 600)
+        self.minsize(min(T.px(900), sw - 60), min(T.px(600), sh - 100))   # 介面縮放（125%、150%）時跟著放大
         self.undo_stack, self.redo_stack = [], []
         self.path = None
         self.x = self.y = None

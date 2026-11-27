@@ -43,7 +43,7 @@ class PeakLabelDialog(tk.Toplevel):
         self.title("峰標註")
         self.configure(bg=T.CARD)
         self.transient(page.app.root)
-        fit_window(self, T.px(720), T.px(600), 560, 420)
+        fit_window(self, T.px(720), T.px(600), T.px(560), T.px(420))
         self._job = None
         self._loading = False
         a = T.accent(self.key)

@@ -878,15 +878,17 @@ def run_gui(rep, timeout=90):
         stats["panes"] = panes
         stats["screen"] = f"{root.winfo_width()}×{root.winfo_height()}，介面縮放 {getattr(_T0, 'UI_FACTOR', 1):g}"
         # 四頁疊在一起：切換後滑鼠指到的地方，一定要是這一頁的元件（不能被別頁蓋住）
-        for key in ALL_KEYS:
-            app.segment.select(key)
-            root.update()
-            for f in app.pages[key].frames():
-                x = f.winfo_rootx() + f.winfo_width() // 2
-                y = f.winfo_rooty() + f.winfo_height() // 2
-                w = root.winfo_containing(x, y)
-                assert w is not None and str(w).startswith(str(f)), \
-                    f"切換到 {key} 後，畫面上看到的是 {w}（應該在 {f} 裡）：頁面被蓋住了"
+        _raise_for_check(root)
+        try:
+            for key in ALL_KEYS:
+                app.segment.select(key)
+                root.update()
+                for f in app.pages[key].frames():
+                    w = _shown_at(root, f)
+                    assert w is not None and str(w).startswith(str(f)), \
+                        f"切換到 {key} 後，畫面上看到的是 {w}（應該在 {f} 裡）：頁面被蓋住了"
+        finally:
+            _raise_for_check(root, False)
         # 背景計算時畫面不能卡住：選很多 Raman 檔一次算
         page = app.pages["Raman"]
         app.segment.select("Raman")
@@ -1056,6 +1058,62 @@ def _texts(w):
     return out
 
 
+def _raise_for_check(root, on=True):
+    """檢查「畫面上看到什麼」時把軟體視窗放到最上層（執行測試的命令列視窗常常蓋在上面）。"""
+    try:
+        root.attributes("-topmost", bool(on))
+        if on:
+            root.lift()
+        root.update()
+    except Exception:
+        pass
+
+
+def _shown_at(root, f):
+    """f 中間（只算螢幕上看得到的部分）那一點，畫面上看到的是哪個元件。
+
+    那一點被別的程式（例如執行測試的命令列）蓋住、或在螢幕外面時，winfo_containing 會是 None：
+    改用 Tk 自己的疊放順序判斷，只看這個軟體自己的元件有沒有蓋住 f。"""
+    x0, y0 = f.winfo_rootx(), f.winfo_rooty()
+    x1, y1 = x0 + f.winfo_width(), y0 + f.winfo_height()
+    sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
+    vx0, vy0, vx1, vy1 = max(x0, 0), max(y0, 0), min(x1, sw), min(y1, sh)
+    if vx1 - vx0 > 4 and vy1 - vy0 > 4:
+        x, y = (vx0 + vx1) // 2, (vy0 + vy1) // 2
+    else:
+        x, y = (x0 + x1) // 2, (y0 + y1) // 2
+    w = root.winfo_containing(x, y)
+    if w is not None:
+        return w
+    cover = _covering(f, x, y)
+    return f if cover is None else cover
+
+
+def _covering(f, x, y):
+    """這個軟體裡蓋在 f 上面（疊放順序比較高、而且包含 (x, y)）的元件；沒有就是 None。"""
+    import tkinter as tk
+    def inside(w):
+        try:
+            if not w.winfo_ismapped():
+                return False
+            wx, wy = w.winfo_rootx(), w.winfo_rooty()
+            return wx <= x < wx + w.winfo_width() and wy <= y < wy + w.winfo_height()
+        except Exception:
+            return False
+    cur = f
+    while getattr(cur, "master", None) is not None:
+        parent = cur.master
+        kids = parent.winfo_children()                     # Tk：由下往上的疊放順序
+        if cur in kids:
+            for s in kids[kids.index(cur) + 1:]:
+                if s.winfo_class() in ("Toplevel", "Menu") or isinstance(s, tk.Toplevel):
+                    continue
+                if inside(s):
+                    return s
+        cur = parent
+    return None
+
+
 _LAYOUT_EXTRA = []          # 其他小視窗（Etching 精靈、Raman 編修、AFM 匯入、峰標註）的排版問題
 
 
@@ -1180,7 +1238,10 @@ def _gui_layout(app, root, pump):
     saved = messagebox.askyesno
     messagebox.askyesno = lambda *a, **k: True
     try:
-        for size in ("1100x680", "1600x940"):
+        from .gui.app import default_window, min_window
+        sw_, sh_ = root.winfo_screenwidth(), root.winfo_screenheight()
+        sizes = ["%dx%d" % min_window(sw_, sh_), "%dx%d" % default_window(sw_, sh_)]   # 最小視窗、開啟時的大小（跟著介面縮放）
+        for size in dict.fromkeys(sizes):
             root.geometry(size)
             pump(lambda: False, 0.4)
             for key in list(app.pages):
