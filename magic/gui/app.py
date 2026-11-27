@@ -92,7 +92,7 @@ def drain_variable_trash():
 
 def min_window(sw, sh):
     """主視窗最小大小：100% 時 1100×680，介面縮放（125%、150%）時跟著放大（不超過螢幕）。"""
-    return min(T.px(1100), sw - 40), min(T.px(680), sh - 80)
+    return min(T.px_min(1100), sw - 40), min(T.px_min(680), sh - 80)
 
 
 def default_window(sw, sh):

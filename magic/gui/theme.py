@@ -81,6 +81,11 @@ def px(n):
     return int(round(n * PX))
 
 
+def px_min(n):
+    """最小視窗大小：螢幕縮放（125%、150%）時跟著放大；小螢幕（介面縮到 90%）時不跟著縮小，維持 100% 的大小。"""
+    return int(round(n * max(PX, 1.0)))
+
+
 def detect_screen(root):
     global _BASE_DPI
     if _BASE_DPI is None:

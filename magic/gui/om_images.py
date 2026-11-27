@@ -118,7 +118,7 @@ class OMViewer(tk.Toplevel):
         self.title(title)
         self.configure(bg=T.CARD)
         self.transient(parent)
-        fit_window(self, T.px(1100 if len(items) > 1 else 760), T.px(620), T.px(420), T.px(320))
+        fit_window(self, T.px(1100 if len(items) > 1 else 760), T.px(620), T.px_min(420), T.px_min(320))
         self.items = items
         self.labels = []
         self._imgs = []

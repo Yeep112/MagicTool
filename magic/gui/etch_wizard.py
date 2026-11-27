@@ -54,7 +54,7 @@ class EtchWizard(tk.Toplevel):
         except Exception:
             sw, sh = 1600, 1000
         self.geometry(f"{min(T.px(1360), sw - 60)}x{min(T.px(900), sh - 80)}")
-        self.minsize(min(T.px(980), sw - 60), min(T.px(640), sh - 100))   # 介面縮放時跟著放大
+        self.minsize(min(T.px_min(980), sw - 60), min(T.px_min(640), sh - 100))   # 介面縮放時跟著放大
         self.vars = {}
         self.widgets = {}
         self.labels_text = {}
@@ -112,15 +112,18 @@ class EtchWizard(tk.Toplevel):
         tl = tk.Frame(parent, bg=T.CARD)
         tl.pack(fill="x")
         self.stage_btns = []
+        self._stage_full = []
         for i, (num, name, _) in enumerate(STAGES):
             b = tk.Label(tl, text=f"{num} {name}", bg=T.CHIP, fg=T.MUTED, font=T.font(9, "bold"), padx=8, pady=5,
                          cursor="hand2")
+            self._stage_full.append((b, f"{num} {name}", num))
             b.grid(row=0, column=2 * i, sticky="ew")
             b.bind("<Button-1>", lambda e, i=i: self.select_stage(i))
             tl.columnconfigure(2 * i, weight=1)
             if i < len(STAGES) - 1:
                 tk.Label(tl, text="›", bg=T.CARD, fg=T.FAINT, font=T.font(11)).grid(row=0, column=2 * i + 1)
             self.stage_btns.append(b)
+        tl.bind("<Configure>", lambda e: self._fit_stage_tabs(e.width), add="+")
         self.stage_text = tk.Label(parent, text="", bg=T.SUBTLE, fg=T.TEXT, font=T.font(9), justify="left",
                                    anchor="w", padx=10, pady=6, wraplength=T.px(760))
         self.stage_text.pack(fill="x", pady=(6, 4))
@@ -451,28 +454,56 @@ class EtchWizard(tk.Toplevel):
                 pass
         self.canvas.set_highlight(key)
 
+    def _fit_stage_tabs(self, width):
+        """流程分頁放不下時只顯示編號（①②③…），滑鼠停上去看名稱；變寬再顯示完整名稱。"""
+        import tkinter.font as tkfont
+        try:
+            f = tkfont.Font(root=self, font=self._stage_full[0][0].cget("font"))
+            pad = 2 * int(float(str(self._stage_full[0][0].cget("padx")))) + 4
+            arrows = sum(w.winfo_reqwidth() for w in self._stage_full[0][0].master.winfo_children()
+                         if w not in [b for b, *_ in self._stage_full])
+        except (tk.TclError, ValueError, IndexError):
+            return
+        need = arrows + sum(f.measure(full) + pad for _, full, _ in self._stage_full)
+        compact = getattr(self, "_stage_compact", False)
+        want = need > width if not compact else need + 16 > width
+        if want == compact:
+            return
+        self._stage_compact = want
+        for b, full, num in self._stage_full:
+            b.configure(text=num if want else full)
+            if not getattr(b, "_tip", None):
+                try:
+                    from .params_panel import Tooltip
+                    b._tip = Tooltip(b, full)
+                except Exception:
+                    b._tip = True
+
     # ================================================================== 下：結果
     def _build_bottom(self):
         bf = tk.Frame(self, bg=T.CARD, padx=12, pady=8, highlightthickness=1, highlightbackground=T.BORDER)
         bf.pack(side="bottom", fill="x")
+        # 先放右邊的按鈕（視窗變窄時最後才被擠到）、再放左邊的結果，中間的算式最先縮
+        right = tk.Frame(bf, bg=T.CARD)
+        right.pack(side="right", fill="y")
         left = tk.Frame(bf, bg=T.CARD)
         left.pack(side="left", fill="y")
         self.big = tk.Label(left, text="—", bg=T.CARD, fg=self.acc["text"] if hasattr(self, "acc") else T.TEXT,
                             font=T.font(16, "bold"), anchor="w")
         self.big.pack(anchor="w")
-        self.small = tk.Label(left, text="", bg=T.CARD, fg=T.TEXT, font=T.font(10), anchor="w", justify="left")
+        self.small = tk.Label(left, text="", bg=T.CARD, fg=T.TEXT, font=T.font(10), anchor="w", justify="left",
+                              wraplength=T.px(360))
         self.small.pack(anchor="w")
-        self.checks = tk.Label(left, text="", bg=T.CARD, fg=T.MUTED, font=T.font(9), anchor="w", justify="left")
+        self.checks = tk.Label(left, text="", bg=T.CARD, fg=T.MUTED, font=T.font(9), anchor="w", justify="left",
+                               wraplength=T.px(360))
         self.checks.pack(anchor="w", pady=(4, 0))
         mid = tk.Frame(bf, bg=T.CARD)
         mid.pack(side="left", fill="both", expand=True, padx=(16, 8))
         tk.Label(mid, text="算式（代入你的數字）", bg=T.CARD, fg=T.FAINT, font=T.font(8, "bold"), anchor="w").pack(fill="x")
-        self.explain = tk.Text(mid, height=5, font=(T.MONO_FAMILY, 9), bg=T.TEXT_BG, fg=T.TEXT, bd=0, wrap="word",
-                               highlightthickness=1, highlightbackground=T.BORDER, padx=6, pady=4)
+        self.explain = tk.Text(mid, height=5, width=24, font=(T.MONO_FAMILY, 9), bg=T.TEXT_BG, fg=T.TEXT, bd=0,
+                               wrap="word", highlightthickness=1, highlightbackground=T.BORDER, padx=6, pady=4)
         self.explain.pack(fill="both", expand=True)
         self.explain.tag_configure("warn", foreground=T.WARNING)
-        right = tk.Frame(bf, bg=T.CARD)
-        right.pack(side="right", fill="y")
         self.ok_btn = ttk.Button(right, text="寫入紀錄", style=f"{self.key}.Accent.TButton", command=self.save)
         self.ok_btn.pack(fill="x")
         ttk.Button(right, text="取消", style=f"{self.key}.Ghost.TButton", command=self.close).pack(fill="x", pady=4)

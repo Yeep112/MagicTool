@@ -490,7 +490,7 @@ class RecordsPanel(tk.Frame):
         win.title("修改歷史")
         win.configure(bg=T.CARD)
         win.transient(self.winfo_toplevel())
-        fit_window(win, T.px(860), T.px(460), T.px(520), T.px(300))
+        fit_window(win, T.px(860), T.px(460), T.px_min(520), T.px_min(300))
         tk.Label(win, text=f"修改、刪除過的紀錄（最新的在上面）：{store.history_path(path).name}", bg=T.CARD, fg=T.MUTED,
                  font=T.font(9), anchor="w").pack(fill="x", padx=12, pady=(10, 4))
         f = tk.Frame(win, bg=T.CARD)

@@ -44,7 +44,7 @@ class AfmImportDialog(tk.Toplevel):
         self.title(f"從 AFM profile 找台階 — {label or key}")
         self.configure(bg=T.CARD)
         self.transient(wizard)
-        fit_window(self, T.px(1080), T.px(700), T.px(820), T.px(520))
+        fit_window(self, T.px(1080), T.px(700), T.px_min(820), T.px_min(520))
         self.profiles = []          # [dict(profile, result, use, manual=(lo, hi))]
         self.cur = None
         a = T.accent(self.k)

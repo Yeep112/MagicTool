@@ -186,13 +186,74 @@ class WrapRow(tk.Frame):
             if not getattr(w, "_has_tip", False):
                 try:
                     from .params_panel import Tooltip
-                    Tooltip(w, full)
+                    w._wrap_tip = Tooltip(w, full)
                     w._has_tip = True
                 except Exception:
                     pass
+        self._watch(w)
         self._plan = None
         self._relayout()
         return w
+
+    def _watch(self, w):
+        """元件之後改文字（例如「☁ 試算表（3）」「▶ 繼續製作」）→ 重新排一次；只顯示圖示時記住新的完整文字。"""
+        if getattr(w, "_wrap_watched", False):
+            return
+        orig = w.configure
+        row = self
+
+        def configure(cnf=None, **kw):
+            text = kw.get("text", cnf.get("text") if isinstance(cnf, dict) else None)
+            comp = getattr(row, "_compact", {})
+            if text is not None and not getattr(row, "_internal", False) and w in comp:
+                comp[w] = (str(text), comp[w][1])
+                tip = getattr(w, "_wrap_tip", None)
+                if tip is not None:
+                    tip.text = str(text)
+                if getattr(row, "_is_compact", False):            # 只顯示圖示中：畫面上維持圖示
+                    kw["text"] = comp[w][1]
+                    if isinstance(cnf, dict):
+                        cnf = {k: v for k, v in cnf.items() if k != "text"}
+            r = orig(cnf, **kw)
+            if text is not None and not getattr(row, "_internal", False):
+                row._schedule()
+            return r
+        try:
+            w.configure = w.config = configure
+            w._wrap_watched = True
+        except Exception:
+            pass
+
+    def _schedule(self):
+        if getattr(self, "_job", None) is None:
+            try:
+                self._job = self.after_idle(self._refresh)
+            except tk.TclError:
+                self._job = None
+
+    def _refresh(self):
+        self._job = None
+        self._plan = None
+        try:
+            self._relayout()
+        except tk.TclError:
+            pass
+
+    def _verify(self):
+        """排好之後實際檢查：有元件拿到的寬度比需要的小（字型、縮放、外框差幾個像素），就當成可用寬度再少一點重排。"""
+        self._vjob = None
+        try:
+            if not self.winfo_ismapped():
+                return
+            hidden = getattr(self, "_hidden", set())
+            deficit = max([w.winfo_reqwidth() - w.winfo_width() for w, *_ in self._items
+                           if w not in hidden and w.winfo_ismapped()] or [0])
+        except tk.TclError:
+            return
+        if deficit > 1 and getattr(self, "_slack", 0) < 120:
+            self._slack = getattr(self, "_slack", 0) + deficit + 2
+            self._plan = None
+            self._relayout()
 
     def set_visible(self, w, show=True):
         """顯示 / 隱藏其中一個元件（例如「建立紀錄檔」只有還沒有紀錄檔時才出現）。"""
@@ -207,6 +268,7 @@ class WrapRow(tk.Frame):
     def _on_conf(self, e):
         if abs(e.width - self._width) > 1:
             self._width = e.width
+            self._slack = 0
             self._relayout()
 
     def _set_compact(self, on):
@@ -214,6 +276,13 @@ class WrapRow(tk.Frame):
         if not comp or getattr(self, "_is_compact", False) == on:
             return
         self._is_compact = on
+        self._internal = True
+        try:
+            self._apply_compact(comp, on)
+        finally:
+            self._internal = False
+
+    def _apply_compact(self, comp, on):
         for w, (full, short) in comp.items():
             try:
                 w.configure(text=short if on else full)
@@ -233,7 +302,7 @@ class WrapRow(tk.Frame):
         return sum(w.winfo_reqwidth() + px for w, _, _, px in self._items if w not in hidden)
 
     def _relayout(self):
-        width = self._width if self._width > 1 else 10 ** 6
+        width = self._width - getattr(self, "_slack", 0) if self._width > 1 else 10 ** 6
         if getattr(self, "_compact", None) and self._width > 1:
             # 放不下一行：先改成只顯示圖示；還是放不下才換行。變寬時多留一點空間再換回完整文字（不會一直跳）
             if not getattr(self, "_is_compact", False):
@@ -280,6 +349,11 @@ class WrapRow(tk.Frame):
                 w.pack(in_=fr, side="right", padx=(px, 0) if n < len(rights) - 1 or lefts else (0, 0),
                        fill="x" if exp else None, expand=exp)
                 w.lift(fr)
+        if self._width > 1 and getattr(self, "_vjob", None) is None:
+            try:
+                self._vjob = self.after(30, self._verify)
+            except tk.TclError:
+                self._vjob = None
 
 
 def fit_label(label, pad=2):
@@ -297,15 +371,16 @@ def fit_label(label, pad=2):
             return 10 ** 6
 
     def on(e):
+        check(e.width)
+
+    def check(width):
         n = getattr(label, "_fit_n", 0)
-        if n > 60:
-            return
         try:
             inner = 2 * (int(float(str(label.cget("padx")))) + int(float(str(label.cget("bd")))) +
                          int(float(str(label.cget("highlightthickness")))))
         except (ValueError, tk.TclError):
             inner = 0
-        avail = e.width - pad - inner
+        avail = width - pad - inner
         if avail <= 30:
             return
         try:
@@ -313,10 +388,10 @@ def fit_label(label, pad=2):
         except (ValueError, tk.TclError):
             cur = 0
         new = None
-        if e.width + 1 < label.winfo_reqwidth():           # 被擠到 → 換行
+        if width + 1 < label.winfo_reqwidth():             # 被擠到 → 換行（一定做：不會越縮越小，見上面）
             new = avail
-        elif cur > 0 and avail > cur + 4:                  # 變寬了 → 放寬（整行放得下就不換行）
-            new = 0 if natural() <= avail else avail
+        elif cur > 0 and avail > cur + 24 and n <= 60:     # 變寬了（多出比捲軸還寬的空間）→ 放寬
+            new = 0 if natural() <= avail else avail       # 只有放寬會來回跳（捲軸出現 / 消失），所以只限制放寬的次數
         if new is not None and new != cur:
             label._fit_n = n + 1
             label.configure(wraplength=new)
@@ -324,6 +399,29 @@ def fit_label(label, pad=2):
 
     label.bind("<Configure>", on, add="+")
     label._fit_label = True
+    # 之後換了比較長的文字、但欄位寬度沒變（不會有 <Configure>）：改完文字再檢查一次
+    orig = label.configure
+
+    def configure(cnf=None, **kw):
+        r = orig(cnf, **kw)
+        if "text" in kw or (isinstance(cnf, dict) and "text" in cnf):
+            def later():
+                try:
+                    if label.winfo_exists() and label.winfo_ismapped():
+                        check(label.winfo_width())
+                except tk.TclError:
+                    pass
+            try:
+                label.after(15, later)
+            except tk.TclError:
+                pass
+        return r
+    if not getattr(label, "_fit_watched", False):
+        try:
+            label.configure = label.config = configure
+            label._fit_watched = True
+        except Exception:
+            pass
     return label
 
 
