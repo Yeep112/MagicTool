@@ -548,12 +548,11 @@ def check_mac_support(tmp):
         home = os.path.join(tmp, "machome")
         app2 = make_mac_app(os.path.join(home, "Applications", "T.app"), python=os.path.join(fake, "python"))
         r = subprocess.run([os.path.join(app2, "Contents", "MacOS", "MagicTool")], capture_output=True, text=True, encoding="utf-8", errors="replace",
-                           timeout=60, env={"HOME": home, "PATH": "/usr/bin:/bin"})
+                           timeout=60, env={"HOME": home, "PATH": "/usr/bin:/bin", "MAGIC_NO_ALERT": "1"})
         log = open(os.path.join(home, "Library", "Application Support", "MagicTool", "logs", "app_launch.log"),
                    encoding="utf-8").read()
         assert r.returncode == 1 and "改用 python 再試一次" in log, log
-        if not shutil.which("osascript"):
-            assert "ALERT:" in r.stderr and "python 測試失敗" in r.stderr, r.stderr
+        assert "ALERT:" in r.stderr and "python 測試失敗" in r.stderr, r.stderr
         out.append("App 殼：失敗時改用 python 重試、顯示錯誤")
         # 程式放在「文件」裡：安裝時複製到不受 macOS 隱私權限制的位置
         from .install import copy_program, mac_protected

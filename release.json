@@ -8,6 +8,7 @@
     "GitHub Actions 雲端測試：每次推到 pending，在真的 Windows、Mac、Linux 上跑 pytest 與完整自我測試（含實際開視窗）",
     "新增 cp950 編碼模擬（繁體中文 Windows 從捷徑開啟時的情況），自我測試裡幾個沒寫 encoding 的地方補上",
     "自我測試：電腦上的 Python 沒有 tkinter 時，macOS 啟動檔的「找 Python」小項改成略過，不再顯示 ✗",
+    "Mac：自我測試裡模擬「App 開不起來」的那一項，在真的 Mac 上會跳出提示視窗等人按而卡住 → 測試時改成只印出訊息（一般使用不受影響）",
     "補上 發佈與更新.md（README 有提到但原本沒有這個檔案）"
   ],
   "history": [

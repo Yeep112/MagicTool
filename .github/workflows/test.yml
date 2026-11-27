@@ -36,9 +36,9 @@ jobs:
       PYTHONIOENCODING: utf-8
       MAGIC_PERF_FACTOR: "4"        # 雲端虛擬機時間抖動大：流暢度門檻放寬；真正的門檻在你電腦上檢查
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python }}
 

@@ -95,7 +95,8 @@ export PATH="/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
 
 alert() {{
     # $1 = 訊息；有 osascript（macOS）就跳視窗，按「打開紀錄」用文字編輯打開 log
-    if command -v osascript >/dev/null 2>&1; then
+    # （MAGIC_NO_ALERT=1：自我測試用，只印出訊息、不跳視窗，避免沒人按而卡住）
+    if [ -z "$MAGIC_NO_ALERT" ] && command -v osascript >/dev/null 2>&1; then
         local btn
         btn=$(osascript - "$1" <<'OSA' 2>/dev/null
 on run argv
