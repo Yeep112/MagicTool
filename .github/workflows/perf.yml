@@ -1,4 +1,4 @@
-# 效能分析（開發用）：在真的 Windows / Mac 上用 cProfile 找出切換機台與蝕刻動畫最花時間的地方。
+# 效能分析與截圖（開發用）：在真的 Windows / Mac / Linux 上用 cProfile 找出最花時間的地方，並截下樣品頁檢查排版。
 # 推到 claude/perf* 分支，或在 Actions 頁面手動執行。不影響發佈。
 name: 效能分析
 
@@ -16,6 +16,7 @@ jobs:
         include:
           - {os: windows-latest, label: Windows}
           - {os: macos-latest, label: Mac}
+          - {os: ubuntu-latest, label: Linux}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     env:
@@ -26,5 +27,21 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-      - run: python -m pip install numpy scipy pandas matplotlib openpyxl
-      - run: python tools/perf_probe.py
+      - run: python -m pip install numpy scipy pandas matplotlib openpyxl pillow
+      - name: Linux 顯示環境
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y xvfb python3-tk tk fonts-noto-cjk
+      - name: 效能分析
+        if: runner.os != 'Linux'
+        run: python tools/perf_probe.py
+      - name: 截圖
+        if: runner.os != 'Mac'
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then xvfb-run -a -s "-screen 0 1600x1000x24" python tools/screenshot.py shots; else python tools/screenshot.py shots; fi
+      - uses: actions/upload-artifact@v4
+        if: always() && runner.os != 'Mac'
+        with:
+          name: screenshots-${{ matrix.label }}
+          path: shots/
+          if-no-files-found: ignore
