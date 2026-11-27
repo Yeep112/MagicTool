@@ -174,7 +174,35 @@ class WrapRow(tk.Frame):
         self._rows = []
         self._plan = None
         self._width = 0
+        # 自己決定要多寬多高：寬度一律要「排成一行」的寬度（不隨目前分成幾行改變），高度照目前的行數。
+        # 否則外面依需要寬度給空間時（grid 沒有 weight、pack 沒有 fill）會「變窄 → 換行 → 需要變小 → 更窄…」來回跳
+        self.pack_propagate(False)
         self.bind("<Configure>", self._on_conf, add="+")
+
+    def _request_size(self, rows):
+        hidden = getattr(self, "_hidden", set())
+        fullw = self.__dict__.setdefault("_fullw", {})
+        comp = getattr(self, "_compact", {})
+        compact = getattr(self, "_is_compact", False)
+        nat, first = 0, True
+        for w, side, exp, px in self._items:
+            if w in hidden:
+                continue
+            rw = w.winfo_reqwidth()
+            if compact and w in comp:
+                rw = fullw.get(w, rw)                       # 只顯示圖示時：還是用完整文字的寬度
+            else:
+                fullw[w] = rw
+            nat += rw + (0 if first else px)
+            first = False
+        h = 0
+        for k, r in enumerate(rows):
+            if r:
+                h += max(self._items[i][0].winfo_reqheight() for i in r) + (self.pady if k else 0)
+        want = (max(nat, 1), max(h, 1))
+        if want != getattr(self, "_req", None):
+            self._req = want
+            tk.Frame.configure(self, width=want[0], height=want[1])
 
     def add(self, w, side="left", expand=False, padx=None, compact=None):
         """compact = 很窄時改顯示的短字（通常是圖示，例如 "🗑"）；滑鼠停上去會顯示完整文字。"""
@@ -324,6 +352,7 @@ class WrapRow(tk.Frame):
             rows[-1].append(i)
             used += need
         plan = (tuple(tuple(r) for r in rows), getattr(self, "_is_compact", False))
+        self._request_size(rows)
         if plan == self._plan:
             return
         self._plan = plan
