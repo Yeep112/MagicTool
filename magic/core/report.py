@@ -49,7 +49,7 @@ def environment():
 
 def _redacted_settings(path):
     text = Path(path).read_text(encoding="utf-8", errors="replace")
-    return re.sub(r'^(\s*(gsheet_key|service_account|sa_path)\s*=\s*).*$', r'\1"（已遮掉）"', text, flags=re.M)
+    return re.sub(r'^(\s*(gsheet_key|gsheet_script_url|gsheet_token|service_account|sa_path|sheet)\s*=\s*).*$', r'\1"（已遮掉）"', text, flags=re.M)
 
 
 def default_folder():

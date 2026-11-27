@@ -302,28 +302,12 @@ def check_etching(paths):
     out.append(f"舊格式備份並升級（{len(old)} 筆不變）")
     # --- Google Sheet 表頭（用假的工作表測，不連網路） ---
 
-    class FakeWS:
-        def __init__(self, rows):
-            self.rows = [list(r) for r in rows]
+    from .testdata import FakeWorksheet
 
-        def row_values(self, i):
-            return self.rows[i - 1] if len(self.rows) >= i else []
-
-        def get_all_values(self):
-            return self.rows
-
-        def update(self, range_name="A1", values=None, **kw):
-            i = int(range_name[1:]) - 1
-            if i < len(self.rows):
-                self.rows[i] = [str(v) for v in values[0]]
-            else:
-                self.rows.append([str(v) for v in values[0]])
-
-        def append_row(self, row, **kw):
-            self.rows.append([str(v) for v in row])
-
-        def delete_rows(self, i):
-            self.rows.pop(i - 1)
+    class FakeWS(FakeWorksheet):
+        @property
+        def rows(self):
+            return self.grid
 
     ws = FakeWS([])
     assert store.ensure_sheet_header(ws) == "new" and ws.rows[0] == store.HEADERS
@@ -342,7 +326,46 @@ def check_etching(paths):
         pass
     out.append("Google Sheet 表頭（模擬）")
     out.append(_check_etching_03(paths, FakeWS))
+    out.append(_check_gsync(paths))
     return "；".join(out)
+
+
+def _check_gsync(paths):
+    """v0.7：團隊共用的 Google Sheet（合成的舊試算表：20 欄 + 自己加的 note）。"""
+    import math
+    from .etching import gsync, store
+    from .etching.model import EtchInput, compute
+    from .testdata import FakeWorksheet, team_sheet_values
+    vals = team_sheet_values()
+    df = gsync.rows_to_df(vals)
+    assert len(df) == 5 and df["Notes"].iloc[2] == "baked 60 min", "讀舊試算表：空白列略過、note → Notes"
+    assert df["RF power (W)"].iloc[2] == 8 and df["DC bias (V)"].iloc[0] == 10, "Bias 的 8W / 10V 要分開"
+    inp = EtchInput(material="hBN", steps="20+20", sio2_method="marker", marker_before="50", marker_out="55",
+                    mat_method="outside", mat_before="100", mat_out="40", name="Cat")
+    rec = store.make_record(inp, compute(inp))
+    rec.update({"Record ID": "12e45", "Revision": 1})
+    ws = FakeWorksheet(vals)
+    assert gsync.append_records(gsync.GspreadSheet(ws), [rec]) == [7], "新紀錄寫在最後一筆資料下面"
+    v = ws.get_all_values()
+    assert v[0][:21] == vals[0] and [r[20] for r in v[1:6]] == [r[20] for r in vals[1:6]], "原本的欄位（含 note）不能動"
+    assert v[6][v[0].index("Record ID")] == "12e45", "Record ID 要保持文字"
+    gsync.update_record(gsync.GspreadSheet(ws), "12e45", dict(rec, Notes="改過"), rec)
+    assert gsync.rows_to_df(ws.get_all_values())["Notes"].iloc[-1] == "改過"
+    folder = os.path.join(os.path.dirname(paths["etching"]), "gsync_test")
+    os.makedirs(folder, exist_ok=True)
+    path = os.path.join(folder, "log.csv")
+    if os.path.exists(path):
+        os.remove(path)
+    store.append_record(rec, path)
+    only_sheet, only_local = gsync.diff(store.read_log(path), df)
+    assert (len(only_sheet), len(only_local)) == (5, 1), (len(only_sheet), len(only_local))
+    gsync.import_to_local(only_sheet, path)
+    loc = store.read_log(path)
+    assert len(loc) == 6 and loc["Name"].iloc[0] == "Ann" and gsync.diff(loc, df)[0] == [], "匯入後不能重複"
+    assert math.isclose(loc["R_hBN(nm/sec)"].iloc[0], 14.8 / 45, rel_tol=1e-9)
+    assert gsync.parse_code(gsync.make_code({"etching": {"gsheet_key": "k", "gsheet_token": "t"}}))["gsheet_token"] == "t"
+    assert "function doPost" in gsync.script_code(), "Apps Script 程式碼要跟著軟體"
+    return "團隊 Google Sheet（名稱對應、保留 note、匯入 / 上傳比對）"
 
 
 def _check_etching_03(paths, FakeWS):
@@ -951,6 +974,7 @@ def run_gui(rep, timeout=90):
         stats["anim_gap"] = max(frame)
         _gui_03(app, root, pump, ep)
         _gui_samples(app, root, pump)
+        _gui_sheet(app, root, pump)
         stats.update(results=results, switch_ms=switch_ms, switch_total=switch_total, bg_gaps=bg_gaps,
                      timings=list(app.timings), fixed_ok=fixed_ok)
         app.close()
@@ -1011,6 +1035,72 @@ def _texts(w):
     for c in w.winfo_children():
         out += _texts(c)
     return out
+
+
+def _gui_sheet(app, root, pump):
+    """v0.7 蝕刻紀錄 ↔ 團隊 Google Sheet（不連網路：用合成的舊試算表代替公開連結）。"""
+    from tkinter import messagebox
+    from .etching import gsync, store
+    from .testdata import team_sheet_values
+    saved = gsync._public_csv, messagebox.askyesno, messagebox.showinfo, messagebox.showerror
+    et = app.settings.setdefault("etching", {})
+    old_et = dict(et)
+    import gc
+    gc.collect()        # 先在主執行緒清掉關掉的視窗留下的 Tk 變數（不然會在背景執行緒回收、卡住背景工作；只有測試沒跑 mainloop 時會這樣）
+    try:
+        gsync._public_csv = lambda et_, timeout=20: team_sheet_values()
+        messagebox.askyesno = messagebox.showinfo = messagebox.showerror = lambda *a, **k: True
+        et.update(gsheet_key="https://docs.google.com/spreadsheets/d/TEST/edit#gid=0", gsheet_script_url="",
+                  gsheet_token="", service_account=os.path.join(tempfile.gettempdir(), "沒有這個金鑰.json"))
+        ep = app.pages["Etching"]
+        app.segment.select("Etching")
+        rp = ep.data
+        rp.source_var.set("Google Sheet")
+        rp.reload()
+        _okr = pump(lambda: rp.df is not None and len(rp.df) == 5 and rp.source_var.get() == "Google Sheet", 10)
+        assert _okr, \
+            f"讀不到 Google Sheet（公開連結）的舊紀錄：{app.status_var.get()}（{None if rp.df is None else len(rp.df)} 筆）"
+        pump(lambda: "公開連結" in rp.path_lab.cget("text"), 3)
+        assert "公開連結，唯讀" in rp.path_lab.cget("text"), rp.path_lab.cget("text")
+        assert len(rp.tree.get_children()) == 5
+        # 用 Google Sheet 的舊紀錄畫圖（不選 = 全部）
+        rp.tree.selection_set(())
+        a = next(x for x in ep.analyses if "比較" in x.name or "趨勢" in x.name)
+        ep.features.select(a.name)
+        gen0 = ep.gen
+        ep.plot()
+        ok = pump(lambda: ep.gen > gen0 and ep.busy is None and ep.last is not None and ep.last["analysis"] is a, 20)
+        assert ok, f"用 Google Sheet 的紀錄畫「{a.name}」沒有完成：{ep.right.text.get('1.0', 'end').strip()[:200]}"
+        # ☁ 同步：比對 → 加到本機 CSV（不重複）
+        n_local = len(store.read_log(rp.csv_path()))
+        win = rp.sync_dialog()
+        assert pump(lambda: win.result is not None, 10) and not win.result.get("error"), win.result
+        assert len(win.result["only_sheet"]) == 5, len(win.result["only_sheet"])
+        win.do_import()
+        assert pump(lambda: win.result is not None and "已把 5 筆" in (win.result.get("done") or ""), 10), win.result
+        assert len(store.read_log(rp.csv_path())) == n_local + 5 and win.result["only_sheet"] == []
+        win.destroy()
+        gc.collect()
+        # ⚙ 設定：貼上團隊設定碼
+        from .gui.settings_dialog import SettingsDialog
+        code = gsync.make_code({"etching": {"gsheet_key": et["gsheet_key"], "gsheet_worksheet": "",
+                                            "gsheet_script_url": "https://script.google.com/macros/s/TEST/exec",
+                                            "gsheet_token": "selftest"}})
+        dlg = SettingsDialog(app, "蝕刻紀錄")
+        dlg.test_sheet = lambda: None                     # 不連網路
+        assert dlg.paste_code(code)
+        cfg = dlg.collect()["etching"]
+        assert cfg["gsheet_token"] == "selftest" and cfg["gsheet_enabled"] and cfg["gsheet_script_url"].endswith("/exec")
+        assert dlg.copy_code().startswith(gsync.CODE_PREFIX)
+        dlg.destroy()
+        gc.collect()
+        rp.source_var.set("本機 CSV")
+        rp.reload()
+        pump(lambda: rp.df is not None and rp.source_var.get() == "本機 CSV", 5)
+    finally:
+        gsync._public_csv, messagebox.askyesno, messagebox.showinfo, messagebox.showerror = saved
+        et.clear()
+        et.update(old_et)
 
 
 def _gui_samples(app, root, pump):

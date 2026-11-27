@@ -26,5 +26,8 @@ version = { attr = "magic.__version__" }
 [tool.setuptools.packages.find]            # 自動包含所有子套件（core、readers、ppms、gui…）
 include = ["magic*"]
 
+[tool.setuptools.package-data]
+"magic.etching" = ["*.gs"]                 # Google Sheet 的 Apps Script 寫入程式
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

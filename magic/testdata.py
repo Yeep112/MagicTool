@@ -363,3 +363,92 @@ def write_samples(folder):
         csv.writer(f).writerows(SAMPLE_SHEET)
     out["sheet"] = sheet
     return out
+
+
+# ---------------------------------------------------------------------------
+# Google Sheet（模擬）：團隊共用的舊試算表 + 假的工作表（不連網路）
+# ---------------------------------------------------------------------------
+def team_sheet_values():
+    """仿照實驗室舊的共用試算表：20 個 v1 欄位 + 自己加的「note」欄（全部是合成的數字和名字）。
+    混著：Bias 有人寫 10V、有人寫 8W；SiO2 欄空白；Gas 有空白；最後有幾列只有空白或一個空格。"""
+    from .etching.calc import HEADERS as V1
+    head = list(V1) + ["note"]
+    rows = [head]
+    spec = [("2026-01-05 9:58:59", "60W", "10V", "Ann", 45, 100.0, 85.2, 50.0, 50.0, "SF6", "#01"),
+            ("2026-01-06 0:02:48", "60W", "10V", "Ann", 45, 85.2, 70.4, 50.0, 50.0, "SF6", ""),
+            ("2026-01-06 15:59:20", "100W", "8W", "Ben", 30, 120.0, 90.0, 60.0, 54.3, "CHF3+O2", "baked 60 min"),
+            ("2026-01-07 19:04:04", "150W", "10W", "Ben", 30, 90.0, 50.5, 54.3, 47.0, "", "unbaked"),
+            ("2026-01-08 22:01:29", "100W", "5V", "Ann", 45, 70.0, 41.0, 47.0, 41.0, "CHF3+O2", "o2 plasma 50w")]
+    for dt, pw, bias, name, t, hb, ha, mb, ma, gas, note in spec:
+        dm, dh = max(mb - ma, 0.0), ha - hb
+        r = {"DateTime": dt, "Method": "ICP", "Power": pw, "Bias": bias, "Pressure": "1Pa", "Type": "direct",
+             "Name": name, "H_hBN_before (nm)": f"{hb:g}", "H_hBN_after (nm)": f"{ha:g}",
+             "H_marker_before (nm)": f"{mb:g}", "H_marker_after (nm)": f"{ma:g}", "T (sec)": str(t),
+             "Δ_marker (nm)": f"{dm:g}", "Δ_hBN (nm)": f"{-dh - dm:g}", "R_hBN(nm/sec)": f"{(-dh) / t:.10g}",
+             "Gas": gas}
+        rows.append([r.get(c, "") for c in V1] + [note])
+    rows += [[""] * len(head) for _ in range(3)] + [[" "] + [""] * (len(head) - 1)] + [[""] * len(head)]
+    return rows
+
+
+class FakeWorksheet:
+    """行為像 gspread.Worksheet 的假工作表：A1 範圍、None = 不寫那一格、' 開頭 = 文字、格子不夠會出錯。"""
+
+    def __init__(self, rows, title="工作表1", rows_max=1000, cols_max=26):
+        self.title = title
+        self.row_count, self.col_count = max(rows_max, len(rows)), max(cols_max, max((len(r) for r in rows), default=0))
+        self.grid = [[str(c) for c in r] for r in rows]
+        self.calls = []
+
+    @staticmethod
+    def _parse(a1):
+        import re as _re
+        m = _re.match(r"([A-Z]+)(\d+)$", a1)
+        col = 0
+        for ch in m.group(1):
+            col = col * 26 + ord(ch) - 64
+        return int(m.group(2)) - 1, col - 1
+
+    def _cell(self, i, j):
+        return self.grid[i][j] if i < len(self.grid) and j < len(self.grid[i]) else ""
+
+    def get_all_values(self):
+        last_r = max((i + 1 for i, r in enumerate(self.grid) if any(c != "" for c in r)), default=0)
+        last_c = max((j + 1 for r in self.grid[:last_r] for j, c in enumerate(r) if c != ""), default=0)
+        return [[self._cell(i, j) for j in range(last_c)] for i in range(last_r)]
+
+    def row_values(self, i):
+        r = self.grid[i - 1] if i - 1 < len(self.grid) else []
+        while r and r[-1] == "":
+            r = r[:-1]
+        return list(r)
+
+    def update(self, range_name="A1", values=None, value_input_option="RAW", **kw):
+        self.calls.append(("update", range_name, values))
+        i0, j0 = self._parse(range_name)
+        for di, row in enumerate(values):
+            for dj, v in enumerate(row):
+                i, j = i0 + di, j0 + dj
+                if i >= self.row_count or j >= self.col_count:
+                    raise ValueError(f"exceeds grid limits: {range_name}")
+                if v is None:
+                    continue
+                while len(self.grid) <= i:
+                    self.grid.append([])
+                while len(self.grid[i]) <= j:
+                    self.grid[i].append("")
+                s = str(v)
+                self.grid[i][j] = s[1:] if value_input_option == "USER_ENTERED" and s.startswith("'") else s
+
+    def add_rows(self, n):
+        self.row_count += n
+
+    def add_cols(self, n):
+        self.col_count += n
+
+    def append_row(self, row, **kw):
+        self.grid.append([str(v) for v in row])
+
+    def delete_rows(self, i):
+        self.calls.append(("delete", i))
+        self.grid.pop(i - 1)

@@ -10,11 +10,11 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 from ..core import settings as S
-from ..etching import store
+from ..etching import gsync, store
 from . import theme as T
 from .widgets import Chip, section_title
 
-COLS = [("#", "#", 40, "e"), ("DateTime", "日期", 128, "w"), ("Material", "材料", 56, "w"),
+COLS = [("#", "#", 40, "e"), ("DateTime", "日期", 142, "w"), ("Material", "材料", 56, "w"),
         ("Method", "機台", 62, "w"), ("Gas", "氣體", 70, "w"), ("Power", "功率", 110, "w"),
         ("Pressure", "壓力", 62, "w"), ("Line width (nm)", "線寬", 52, "e"), ("Etch steps (s)", "時間 (s)", 66, "e"),
         ("R_hBN(nm/sec)", "R_材料", 64, "e"), ("σ R_material (nm/sec)", "±", 46, "e"),
@@ -49,6 +49,10 @@ class RecordsPanel(tk.Frame):
         cb = ttk.Combobox(bar, textvariable=self.source_var, values=SOURCES, state="readonly", width=10)
         cb.pack(side="left", padx=(6, 0))
         cb.bind("<<ComboboxSelected>>", lambda e: self.reload())
+        sync_b = ttk.Button(bar, text="☁ 同步", style=f"{key}.Small.TButton", command=self.sync_dialog)
+        sync_b.pack(side="left", padx=(6, 0))
+        from .params_panel import Tooltip
+        Tooltip(sync_b, "比對本機 CSV 和 Google Sheet：把 Google Sheet 的舊紀錄加到本機，或把本機的紀錄補上傳")
         bar2 = tk.Frame(self, bg=T.CARD)
         bar2.pack(fill="x", pady=(0, 4))
         for text, cmd, tip in (("✎ 修改", self.edit_selected, "修改選取的那一筆（也可以在表格上雙擊）；修改前的值會留在修改歷史"),
@@ -138,8 +142,11 @@ class RecordsPanel(tk.Frame):
         def work():
             try:
                 if src == SOURCES[1]:
-                    df = store.gsheet_read(et.get("gsheet_key", ""), S.service_account_path(settings),
-                                           et.get("gsheet_worksheet", ""))
+                    df, how = gsync.read(settings)
+                    label = f"Google Sheet（{how}{'' if gsync.can_write(settings) else '，唯讀'}）：" \
+                        f"{store.parse_sheet_key(et.get('gsheet_key', '')) or '（未設定）'}"
+                    self.app.post(("call", lambda: gen == self._gen and self.path_lab.winfo_exists()
+                                   and self.path_lab.configure(text=label)))
                 elif src == SOURCES[2]:
                     from ..etching.store import file_schema
                     if file_schema(demo) != "v2":
@@ -358,8 +365,7 @@ class RecordsPanel(tk.Frame):
                 bad = 0
                 for old in gone:
                     try:
-                        store.gsheet_delete(old.get("Record ID", ""), old, et.get("gsheet_key", ""),
-                                            S.service_account_path(settings), et.get("gsheet_worksheet", ""))
+                        gsync.delete(old.get("Record ID", ""), old, settings)
                     except Exception:
                         bad += 1
                 self.app.post(("status", ("Google Sheet 也已刪除" if not bad else
@@ -369,6 +375,110 @@ class RecordsPanel(tk.Frame):
         self.app.status(f"已刪除 {len(gone)} 筆（可以在「🕘 修改歷史」還原）", "ok")
         self.reload()
         return len(gone)
+
+    def sync_dialog(self):
+        """☁ 同步：比對本機 CSV 和 Google Sheet，兩邊互補（不會刪任何東西）。"""
+        settings = self.app.settings
+        et = settings.get("etching", {})
+        if not (et.get("gsheet_key") or et.get("gsheet_script_url")):
+            if messagebox.askyesno("☁ 同步", "還沒有設定 Google Sheet。\n\n要打開 ⚙ 設定 → 蝕刻紀錄，貼上試算表網址或團隊設定碼嗎？",
+                                   parent=self):
+                self.app.open_settings("蝕刻紀錄")
+            return None
+        win = tk.Toplevel(self)
+        win.title("☁ 同步蝕刻紀錄")
+        win.configure(bg=T.CARD, padx=16, pady=14)
+        top = self.winfo_toplevel()
+        win.transient(top)
+        win.geometry(f"+{top.winfo_rootx() + T.px(360)}+{top.winfo_rooty() + T.px(160)}")
+        msg = tk.Label(win, text="比對中…（讀取 Google Sheet 和本機 CSV）", bg=T.CARD, fg=T.TEXT, font=T.font(10),
+                       justify="left", anchor="w", wraplength=T.px(520))
+        msg.pack(fill="x")
+        bf = tk.Frame(win, bg=T.CARD)
+        bf.pack(fill="x", pady=(12, 0))
+        win.result = None
+        path = self.csv_path()
+
+        def busy(text):
+            msg.configure(text=text)
+            for w in bf.winfo_children():
+                w.configure(state="disabled")
+
+        def show(res):
+            if not win.winfo_exists():
+                return
+            win.result = res
+            for w in bf.winfo_children():
+                w.destroy()
+            if res.get("error"):
+                msg.configure(text=f"讀不到：{res['error']}", fg=T.ERROR)
+            else:
+                only_sheet, only_local, how = res["only_sheet"], res["only_local"], res["how"]
+                lines = [f"Google Sheet（{how}）：{res['n_sheet']} 筆　·　本機 CSV：{res['n_local']} 筆",
+                         f"‧ 只有 Google Sheet 有：{len(only_sheet)} 筆（例如以前直接填在試算表的紀錄、同事的紀錄）",
+                         f"‧ 只有本機有：{len(only_local)} 筆（例如沒開同步時存的、寫入失敗的）"]
+                if res.get("done"):
+                    lines.append("")
+                    lines.append(res["done"])
+                if not gsync.can_write(settings) and only_local:
+                    lines.append("\n上傳需要寫入權限：⚙ 設定 → 蝕刻紀錄，貼上團隊設定碼（Apps Script）或指定金鑰。")
+                msg.configure(text="\n".join(lines), fg=T.TEXT)
+                if only_sheet:
+                    ttk.Button(bf, text=f"⬇ 加到本機 CSV（{len(only_sheet)} 筆）", style=f"{self.key}.Accent.TButton",
+                               command=win.do_import).pack(side="left")
+                if only_local and gsync.can_write(settings):
+                    ttk.Button(bf, text=f"⬆ 上傳到 Google Sheet（{len(only_local)} 筆）", style=f"{self.key}.Small.TButton",
+                               command=win.do_upload).pack(side="left", padx=(6, 0))
+            ttk.Button(bf, text="關閉", style=f"{self.key}.Ghost.TButton", command=win.destroy).pack(side="right")
+
+        def compare(done=""):
+            def work():
+                try:
+                    sheet_df, how = gsync.read(settings)
+                    local = store.read_log(path)
+                    only_sheet, only_local = gsync.diff(local, sheet_df)
+                    res = dict(how=how, n_sheet=len(sheet_df), n_local=len(local), only_sheet=only_sheet,
+                               only_local=only_local, done=done)
+                except Exception as e:
+                    res = dict(error=str(e), done=done)
+                self.app.post(("call", lambda: show(res)))
+            self.app.submit(work)
+
+        def do_import():
+            recs = (win.result or {}).get("only_sheet") or []
+            if not recs:
+                return
+            busy(f"加到本機 CSV 中…（{len(recs)} 筆；會先備份）")
+
+            def work():
+                try:
+                    n, backup = gsync.import_to_local(recs, path)
+                    done = f"✓ 已把 {n} 筆加到本機 CSV（依日期排序）" + (f"；原本的檔案備份在 {backup.name}" if backup else "")
+                except Exception as e:
+                    done = f"✗ 加到本機失敗（檔案是不是被 Excel 開著？）：{e}"
+                self.app.post(("call", lambda: (self.reload(), compare(done))))
+            self.app.submit(work)
+
+        def do_upload():
+            recs = (win.result or {}).get("only_local") or []
+            if not recs:
+                return
+            busy(f"上傳到 Google Sheet 中…（{len(recs)} 筆）")
+
+            def work():
+                try:
+                    sheet = gsync.writer(settings)
+                    for k in range(0, len(recs), 40):
+                        gsync.append_records(sheet, recs[k:k + 40])
+                    done = f"✓ 已上傳 {len(recs)} 筆到 Google Sheet（加在最後面；原本的資料沒有動）"
+                except Exception as e:
+                    done = f"✗ 上傳失敗：{e}"
+                self.app.post(("call", lambda: (self.reload() if self.source_var.get() == SOURCES[1] else None,
+                                                compare(done))))
+            self.app.submit(work)
+        win.do_import, win.do_upload, win.compare = do_import, do_upload, compare
+        compare()
+        return win
 
     def show_history(self):
         path = self.csv_path()
@@ -424,11 +534,9 @@ class RecordsPanel(tk.Frame):
                 def work():
                     try:
                         if e["Action"] == "刪除":
-                            store.gsheet_append(back, et.get("gsheet_key", ""), S.service_account_path(settings),
-                                                et.get("gsheet_worksheet", ""))
+                            gsync.append(back, settings)
                         else:
-                            store.gsheet_update(e["Record ID"], back, None, et.get("gsheet_key", ""),
-                                                S.service_account_path(settings), et.get("gsheet_worksheet", ""))
+                            gsync.update(e["Record ID"], back, None, settings)
                         self.app.post(("status", ("Google Sheet 也已還原", "ok")))
                     except Exception as err:
                         self.app.post(("status", (f"Google Sheet 還原失敗，請手動修改（本機 CSV 已還原）：{err}", "warn")))

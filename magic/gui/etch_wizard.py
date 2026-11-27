@@ -13,7 +13,6 @@ import tkinter as tk
 from dataclasses import fields
 from tkinter import messagebox, ttk
 
-from ..core import settings as S
 from ..etching import store
 from ..etching.model import (GASES, INSTRUMENTS, MAT_METHODS, MATERIALS, RESISTS, SIO2_METHODS, EtchInput,
                              EtchInputError, compute, parse_steps, parse_values)
@@ -654,11 +653,12 @@ class EtchWizard(tk.Toplevel):
 
             def work():
                 try:
-                    store.gsheet_append(rec, et.get("gsheet_key", ""), S.service_account_path(settings),
-                                        et.get("gsheet_worksheet", ""))
+                    from ..etching import gsync
+                    gsync.append(rec, settings)
                     self.app.post(("status", ("Google Sheet 也已寫入", "ok")))
                 except Exception as e:
-                    self.app.post(("status", (f"Google Sheet 寫入失敗（本機 CSV 已存好）：{e}", "error")))
+                    self.app.post(("status", (f"Google Sheet 寫入失敗（本機 CSV 已存好；之後可以按 ☁ 同步 補上）：{e}",
+                                              "error")))
             self.app.submit(work)
             notes.append("Google Sheet 寫入中…")
         keep = {k: self.vars[k].get() for k in KEEP_FIELDS if k in self.vars}
@@ -730,8 +730,8 @@ class EtchWizard(tk.Toplevel):
 
             def work():
                 try:
-                    store.gsheet_update(rid, new, old, et.get("gsheet_key", ""), S.service_account_path(settings),
-                                        et.get("gsheet_worksheet", ""))
+                    from ..etching import gsync
+                    gsync.update(rid, new, old, settings)
                     self.app.post(("status", ("Google Sheet 也已修改", "ok")))
                 except Exception as e:
                     self.app.post(("status", (f"Google Sheet 修改失敗（本機 CSV 已改好）：{e}", "error")))

@@ -5,7 +5,7 @@
   ‧ 新欄位（材料、線寬、ICP / RF、氣體流量、分段時間、量法、誤差…）一律加在最後面
   ‧ 舊格式的 CSV 第一次寫入新紀錄前會先備份（etch_rate_log.v1備份_日期.csv），再把標題列加長、
     舊紀錄的新欄位自動補上（材料 = hBN、量法 = 從基板量 + marker…）
-  ‧ Google Sheet 的第一列如果是舊標題，會在後面補上新欄位名稱（資料列不動）
+  ‧ Google Sheet 用欄位「名稱」對應（gsync.py）：原本的欄位（含自己加的 note）不動，缺的欄位加在最後面
   ‧ v0.3 加了光阻蝕刻率、交叉檢查、Record ID 等欄位（一樣加在最後面）；0.2 寫的檔案會自動備份再補欄位
 
 修改 / 刪除紀錄
@@ -138,6 +138,18 @@ def fill_legacy(rec: dict) -> dict:
     for i, g in enumerate(gases[:3], 1):
         rec[f"Gas {i}"] = g
     rec["Pressure (Pa)"] = _pressure_pa(rec.get("Pressure", ""))
+    icp = str(rec.get("Method", "")).upper().startswith("ICP")
+    m = re.search(r"([\d.]+)\s*W\b", str(rec.get("Power", "")), re.I)
+    if m and _num(rec.get("ICP power (W)" if icp else "RF power (W)")) is None:
+        rec["ICP power (W)" if icp else "RF power (W)"] = float(m.group(1))
+    bias = str(rec.get("Bias", "")).strip()
+    m = re.match(r"^\s*(-?[\d.]+)\s*([A-Za-z]*)\s*$", bias)
+    if m:                                         # 舊紀錄的 Bias 有人寫 10V、有人寫 8W（ICP 的 RF bias 功率）
+        unit = m.group(2).lower()
+        if unit == "w" and _num(rec.get("RF power (W)")) is None:
+            rec["RF power (W)"] = float(m.group(1))
+        elif unit in ("v", "") and _num(rec.get("DC bias (V)")) is None:
+            rec["DC bias (V)"] = float(m.group(1))
     return rec
 
 
@@ -494,8 +506,10 @@ def record_to_inputs(row):
     m = re.search(r"([\d.]+)\s*W", str(row.get("Power", "")))
     if m:
         d["icp_power" if d["instrument"].upper().startswith("ICP") else "rf_power"] = m.group(1)
-    m = re.search(r"([-\d.]+)\s*V", str(row.get("Bias", "")))
-    if m:
+    m = re.search(r"([-\d.]+)\s*([VW]?)", str(row.get("Bias", "")), re.I)
+    if m and m.group(2).upper() == "W":           # 舊紀錄的「10W」是 RF bias 功率
+        d.setdefault("rf_power", m.group(1))
+    elif m:
         d["dc_bias"] = m.group(1)
     m = re.match(r"\s*([\d.]+)\s*([A-Za-z]*)", str(row.get("Pressure", "")))
     if m:
@@ -617,77 +631,39 @@ def open_worksheet(key, service_account, worksheet=""):
 
 
 def ensure_sheet_header(ws):
-    """第一列是空的 → 寫 v2 標題；是舊標題 → 在後面補新欄位名稱（資料列不動）。回傳做了什麼。"""
-    head = [str(c).strip() for c in ws.row_values(1)]
-    if not any(head):
-        ws.append_row(HEADERS, value_input_option="USER_ENTERED")
-        return "new"
-    if head[:len(HEADERS)] == HEADERS:
+    """第一列是空的 → 寫標題；缺欄位 → 在最後面補上欄位名稱（原本的欄位、資料列都不動）。回傳做了什麼。
+    欄位用名稱對應（note → Notes），所以試算表裡自己加的欄位不會被蓋掉。"""
+    from .gsync import GspreadSheet, plan
+    sheet = GspreadSheet(ws)
+    values = sheet.values()
+    _, width, missing = plan(values[0] if values else [])
+    if not missing:
         return "ok"
-    if head[:len(V1)] == V1:
-        ws.update(range_name="A1", values=[HEADERS])
-        return "upgraded"
-    raise SheetError("Google Sheet 第一列不是蝕刻紀錄的欄位名稱，為了不寫錯位置，沒有寫入")
+    sheet.header(width, missing, values)
+    return "new" if width == 0 else "upgraded"
 
 
 def gsheet_append(rec, key, service_account, worksheet="", ws=None):
+    from .gsync import GspreadSheet, append_records
     ws = ws or open_worksheet(key, service_account, worksheet)
-    ensure_sheet_header(ws)
-    ws.append_row([_cell(rec.get(c, "")) for c in HEADERS], value_input_option="USER_ENTERED")
+    append_records(GspreadSheet(ws), [rec])
     return True
 
 
 def gsheet_read(key, service_account, worksheet="", ws=None):
-    import pandas as pd
+    from .gsync import rows_to_df
     ws = ws or open_worksheet(key, service_account, worksheet)
-    rows = ws.get_all_values()
-    if not rows:
-        return normalize(pd.DataFrame(columns=HEADERS))
-    head, body = rows[0], rows[1:]
-    width = len(head)
-    body = [r + [""] * (width - len(r)) for r in body]
-    return normalize(pd.DataFrame(body, columns=head))
-
-
-def _sheet_row(ws, rid, old=None):
-    """Google Sheet 裡這筆紀錄在第幾列（1 起算，含標題列）。先找 Record ID；舊紀錄沒有 ID 時用日期 + 原始輸入比對。"""
-    rows = ws.get_all_values()
-    if not rows:
-        return None
-    head = [str(c).strip() for c in rows[0]]
-    if "Record ID" in head:
-        j = head.index("Record ID")
-        hits = [i for i, r in enumerate(rows[1:], 2) if len(r) > j and r[j].strip() == str(rid)]
-        if len(hits) == 1:
-            return hits[0]
-    if old:
-        keys = [c for c in ("DateTime", "Name", "Raw inputs", "T (sec)") if c in head and str(old.get(c, "")).strip()]
-        if keys and "DateTime" in keys:
-            idx = [head.index(c) for c in keys]
-            want = [str(old.get(c, "")).strip() for c in keys]
-            hits = [i for i, r in enumerate(rows[1:], 2)
-                    if all(len(r) > j and str(r[j]).strip() == w for j, w in zip(idx, want))]
-            if len(hits) == 1:
-                return hits[0]
-    return None
+    return rows_to_df(ws.get_all_values())
 
 
 def gsheet_update(rid, new_rec, old_rec, key, service_account, worksheet="", ws=None):
-    """修改 Google Sheet 裡對應的那一列。找不到（或找到不只一列）就丟出 SheetError，不會改錯列。"""
+    """修改 Google Sheet 裡對應的那一列。找不到（或找到不只一列）就丟出 SheetError，不會改錯列。回傳第幾列。"""
+    from .gsync import GspreadSheet, update_record
     ws = ws or open_worksheet(key, service_account, worksheet)
-    ensure_sheet_header(ws)
-    i = _sheet_row(ws, rid, old_rec)
-    if i is None:
-        raise SheetError("Google Sheet 裡找不到對應的那一列（本機 CSV 已改好；Google Sheet 請手動修改）")
-    ws.update(range_name=f"A{i}", values=[[_cell(new_rec.get(c, "")) for c in HEADERS]],
-              value_input_option="USER_ENTERED")
-    return i
+    return update_record(GspreadSheet(ws), rid, new_rec, old_rec)
 
 
 def gsheet_delete(rid, old_rec, key, service_account, worksheet="", ws=None):
+    from .gsync import GspreadSheet, delete_record
     ws = ws or open_worksheet(key, service_account, worksheet)
-    i = _sheet_row(ws, rid, old_rec)
-    if i is None:
-        raise SheetError("Google Sheet 裡找不到對應的那一列（本機 CSV 已刪除；Google Sheet 請手動刪除）")
-    ws.delete_rows(i)
-    return i
+    return delete_record(GspreadSheet(ws), rid, old_rec)

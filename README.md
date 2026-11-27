@@ -30,7 +30,7 @@ MagicTool\
 └─ assets\              ← 圖示
 ```
 
-需要：Anaconda（numpy、scipy、pandas、matplotlib、tkinter 都內建）。Google Sheet 同步另外需要 `pip install gspread google-auth`。
+需要：Anaconda（numpy、scipy、pandas、matplotlib、tkinter 都內建）。Google Sheet 團隊紀錄用 Apps Script（貼「團隊設定碼」）不需要另外裝套件；用服務帳號金鑰才需要 `pip install gspread google-auth`。
 Windows 和 macOS 都可以用（同一個資料夾、同一份程式）。
 
 ## 第一次使用（Windows）
@@ -207,6 +207,10 @@ H_m,out / H_out = 蝕刻後從 SiO2 表面量到 marker / 材料頂端的高度�
 - **✎ 修改 / 🗑 刪除 / 🕘 修改歷史**：雙擊表格的一筆就能修改（量測值、條件都帶入）；修改前的值、刪除的紀錄都寫進
   `<紀錄檔名>.history.csv`，「修改歷史」可以還原。每筆紀錄有 `Record ID`、`Revision`、`Modified at`；
   Google Sheet 會用 Record ID 找到同一列一起修改 / 刪除（找不到時不會亂改，會請你手動處理）。
+- **☁ 團隊 Google Sheet（v0.7）**：中間下拉選單選「Google Sheet」就能看所有人的紀錄（以前直接填在試算表的也可以，沒填的欄位空著），
+  一樣可以畫條件比較、多時間擬合、趨勢。⚙ 設定 → 蝕刻紀錄 →「📥 貼上團隊設定碼」後，每個人新增 / 修改 / 刪除紀錄都會自動寫進同一張試算表；
+  「☁ 同步」把試算表的舊紀錄加到本機 CSV，或把本機還沒上傳的補上傳。設定步驟（Apps Script、權限）見
+  [`Google Sheet 團隊設定.md`](Google%20Sheet%20團隊設定.md)。
 
 **CSV 格式（v2）**：原本 20 個欄位**順序、意義都不變**，新欄位全部加在後面（`Schema`、`Material`、`Line width (nm)`、`Gas 1`～`Flow 3 (sccm)`、
 `ICP power (W)`、`RF power (W)`、`Pressure (Pa)`、`Etch steps (s)`、`SiO2 method`、`Material method`、`d_* / σ_*`、`Selectivity`、
@@ -216,7 +220,7 @@ H_m,out / H_out = 蝕刻後從 SiO2 表面量到 marker / 材料頂端的高度�
 |---|---|
 | 舊 CSV（20 欄） | 讀的時候自動換算（d_SiO2 = Δ_marker、d_材料 = Δ_hBN + Δ_marker，材料當作 hBN）；寫入前會問你，先備份成 `*.v1備份_日期.csv` 再升級 |
 | 舊公式 `R_hBN = (Δ_hBN + Δ_marker) / T` | 新紀錄仍然成立（`R_hBN(nm/sec)` 欄位現在代表「選的材料」的蝕刻率） |
-| Google Sheet | 第一列是舊標題 → 只在後面補新欄位名稱，資料列不動；第一列看不懂 → 不寫入，避免寫錯位置 |
+| Google Sheet | 用欄位**名稱**對應（大小寫、空白不計；`note` → `Notes`）：原本的欄位（含自己加的）不改、不搬，缺的加在最後面，認不得的欄位和公式不碰；新紀錄寫在最後一筆資料下面；第一列看不懂 → 不寫入；舊紀錄的 `Power` 60W、`Bias` 10V / 8W 會換算成 ICP / RF 功率與 DC bias |
 | Excel 副本 | 舊標題會補上新欄位 |
 | 舊版（0.2 / 0.3）寫的 CSV | 0.3、0.4 又在最後面加了 `Resist after (nm)`、`R_resist (nm/sec)`、`Selectivity (material/resist)`、`SiO2 cross-check`、`Material cross-check`、`Record ID`、`Revision`、`Modified at`、`OM before`、`OM after`：寫入時自動備份（`*.升級前備份_日期.csv`）再補上 |
 

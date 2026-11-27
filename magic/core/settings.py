@@ -32,9 +32,11 @@ DEFAULTS = {
     "etching": {
         "csv_path": "",              # 空白 = %LOCALAPPDATA%\MagicTool\etching\etch_rate_log.csv
         "xlsx_mirror": False,        # True = 每次寫入也更新同名 .xlsx
-        "gsheet_enabled": False,     # True = 也寫到 Google Sheet（需要 gspread 與金鑰）
-        "gsheet_key": "",            # 試算表網址或 key
-        "gsheet_worksheet": "",      # 工作表名稱；空白 = 第一張
+        "gsheet_enabled": False,     # True = 新增 / 修改 / 刪除時也同步到 Google Sheet
+        "gsheet_key": "",            # 試算表網址或 key（網址裡的 gid 會用來選工作表）
+        "gsheet_worksheet": "",      # 工作表名稱；空白 = 網址裡的那張（沒有 gid 就是第一張）
+        "gsheet_script_url": "",     # Apps Script 網頁應用程式網址（…/exec）；有填就用它寫入（同事不需要金鑰）
+        "gsheet_token": "",          # Apps Script 的通行碼
         "service_account": "",       # 金鑰路徑；空白 = secrets\service_account.json
     },
     # 製程 → 樣品頁
