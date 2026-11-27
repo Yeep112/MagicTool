@@ -686,5 +686,60 @@ def parse_code(text):
     return {k: str(d.get(k, "") or "") for k in ("gsheet_key", "gsheet_worksheet", "gsheet_script_url", "gsheet_token")}
 
 
+# ---------------------------------------------------------------------------
+# 團隊設定檔：放在工具資料夾，同事打開軟體就自動接上（不會上傳到公開的 GitHub）
+# ---------------------------------------------------------------------------
+TEAM_FILE = "team_sheet_secret.txt"     # 檔名有 secret：.gitignore 與 publish 都會排除，不會上傳
+
+
+def team_file_path(root=None):
+    from ..core.settings import TOOL_ROOT
+    import os
+    return os.path.join(str(root or TOOL_ROOT), TEAM_FILE)
+
+
+def write_team_file(settings, root=None):
+    """把目前的團隊設定碼存成工具資料夾裡的團隊設定檔，回傳路徑。"""
+    code = make_code(settings)
+    path = team_file_path(root)
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        f.write("# Magic Tool 團隊設定檔：放在 MagicTool 資料夾裡，打開軟體就自動接上實驗室的蝕刻紀錄表單。\n"
+                "# 裡面有通行碼：只私下複製給實驗室成員，不要上傳到 GitHub 或公開的地方（publish 會自動排除）。\n")
+        f.write(code + "\n")
+    return path
+
+
+def read_team_file(root=None):
+    """讀工具資料夾裡的團隊設定檔 → 設定碼的內容（dict）；沒有檔案或看不懂 → None。"""
+    path = team_file_path(root)
+    try:
+        with open(path, encoding="utf-8") as f:
+            text = "".join(l for l in f if not l.lstrip().startswith("#"))
+    except OSError:
+        return None
+    try:
+        return parse_code(text)
+    except SheetError:
+        return None
+
+
+def team_defaults(settings, state, root=None):
+    """還沒設定寫入、而且還沒套用過團隊設定檔：回傳套用後的新設定；否則 None（不覆蓋使用者自己的設定）。"""
+    import copy
+    if (state or {}).get("etch_team_file") == "applied" or can_write(settings):
+        return None
+    et0 = _et(settings)
+    if (et0.get("gsheet_script_url") or "").strip():          # 自己填過 Apps Script（只是缺通行碼）→ 不動
+        return None
+    d = read_team_file(root)
+    if not d:
+        return None
+    new = copy.deepcopy(settings or {})
+    et = new.setdefault("etching", {})
+    et.update(d)
+    et["gsheet_enabled"] = True
+    return new
+
+
 def script_code():
     return SCRIPT_FILE.read_text(encoding="utf-8")

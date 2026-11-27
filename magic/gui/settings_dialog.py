@@ -143,7 +143,8 @@ class SettingsDialog(tk.Toplevel):
         tk.Label(body, text="Google Sheet（團隊共用紀錄，選用）", bg=T.CARD, fg=T.FAINT, font=T.font(9, "bold")).grid(
             row=r, column=0, columnspan=3, sticky="w", pady=(14, 2))
         r += 1
-        tk.Label(body, text="同事只要按「📥 貼上團隊設定碼」就設定好了（設定碼由試算表擁有者在這裡按「📋 複製」產生）。".replace(
+        tk.Label(body, text=("同事接上的方法：MagicTool 資料夾裡有團隊設定檔（管理者按「💾 存成團隊設定檔」產生）就會自動接上；"
+                      "或按「📥 貼上團隊設定碼」（管理者按「📋 複製」產生）。").replace(
                      " ", "\u00a0"),
                  bg=T.CARD, fg=T.MUTED, font=T.font(9), justify="left", wraplength=T.px(560)).grid(
             row=r, column=0, columnspan=3, sticky="w", pady=(0, 4))
@@ -152,6 +153,7 @@ class SettingsDialog(tk.Toplevel):
         row.grid(row=r, column=1, columnspan=2, sticky="ew", pady=4)
         row.add(ttk.Button(row, text="📥 貼上團隊設定碼", style="Neutral.Small.TButton", command=self.paste_code), padx=0)
         row.add(ttk.Button(row, text="📋 複製團隊設定碼", style="Neutral.Small.TButton", command=self.copy_code))
+        row.add(ttk.Button(row, text="💾 存成團隊設定檔", style="Neutral.Small.TButton", command=self.save_team_file))
         row.add(ttk.Button(row, text="🧭 一步一步接 Apps Script", style="Neutral.Small.TButton",
                            command=self.open_script_guide))
         row.add(ttk.Button(row, text="📖 設定教學", style="Neutral.Small.TButton", command=self.open_sheet_guide))
@@ -348,6 +350,27 @@ class SettingsDialog(tk.Toplevel):
         messagebox.showinfo("團隊設定碼", "已複製。請私下傳給同事（LINE、email…），他們在這裡按「📥 貼上團隊設定碼」。\n\n"
                                      "設定碼裡有通行碼，不要貼在公開的地方（GitHub、公開群組）。", parent=self)
         return code
+
+    def save_team_file(self, ask=True):
+        """把團隊設定碼存成工具資料夾裡的 team_sheet_secret.txt：同事拿到含這個檔的 MagicTool 資料夾，打開就自動接上。"""
+        from ..etching import gsync
+        try:
+            path = gsync.write_team_file(self.collect())
+        except gsync.SheetError as e:
+            messagebox.showinfo("團隊設定檔", str(e), parent=self)
+            return None
+        except OSError as e:
+            messagebox.showerror("團隊設定檔", f"存不進工具資料夾：{e}", parent=self)
+            return None
+        if ask:
+            messagebox.showinfo(
+                "團隊設定檔",
+                f"已存好：{path}\n\n"
+                "把整個 MagicTool 資料夾（含這個檔）複製給同事，或把這個檔放進同事的 MagicTool 資料夾："
+                "他們打開軟體就會自動接上實驗室的蝕刻紀錄表單，不用貼設定碼。\n\n"
+                "這個檔不會上傳到 GitHub（publish、收更新都會排除），自動更新也不會刪掉它。"
+                "裡面有通行碼，只私下給實驗室成員。", parent=self)
+        return path
 
     def copy_script(self):
         from ..etching import gsync

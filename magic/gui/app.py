@@ -113,6 +113,7 @@ class App:
         self.dead = False
         self.settings = S.load_settings()
         self.state = S.load_gui_state()
+        self._team_applied = self._apply_team_file() if self.prompts else False
         saved_view = dict(self.state.get("view", {}))
         if "xlabel" not in saved_view:              # 0.2 以前只有「字體 小 / 中 / 大」
             from .figure_panel import FONT_SIZES
@@ -270,6 +271,31 @@ class App:
         self.last_switch_ms = (time.perf_counter() - t0) * 1000
         if key == "Etching" and self.prompts and not self._sheet_prompted:
             self.root.after(900, self._maybe_sheet_prompt)
+
+    def _apply_team_file(self, root=None):
+        """工具資料夾裡有團隊設定檔（管理者私下給的 team_sheet_secret.txt）、這台還沒設定寫入：
+        自動接上實驗室的蝕刻紀錄表單（不用貼設定碼）。使用者自己設定過的不會被蓋掉；只套用一次。"""
+        from ..etching import gsync
+        try:
+            new = gsync.team_defaults(self.settings, self.state, root)
+        except Exception:
+            return False
+        if not new:
+            return False
+        self.settings = new
+        try:
+            S.save_settings(new)
+        except Exception:
+            pass
+        self.state["etch_team_file"] = "applied"
+        self.state["etch_sheet_prompt"] = "done"
+        try:
+            self.root.after(1500, lambda: (self.save_state_soon(), self.status(
+                "已自動接上實驗室的蝕刻紀錄表單（工具資料夾的團隊設定檔）：Etching「寫入紀錄」會自動加到 Google 試算表",
+                "ok")))
+        except Exception:
+            pass
+        return True
 
     def _maybe_sheet_prompt(self):
         """第一次開 Etching、還沒接上實驗室的蝕刻紀錄表單：請使用者貼上團隊設定碼（設定碼不內建在公開的程式裡）。"""

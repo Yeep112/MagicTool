@@ -3,6 +3,7 @@ settings.toml
 gui_state.json
 service_account*.json
 *secret*
+team_sheet_secret.txt
 _secrets/
 _backup/
 logs/

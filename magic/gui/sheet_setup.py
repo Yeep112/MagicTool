@@ -172,6 +172,20 @@ class TeamCodePrompt(tk.Toplevel):
             fill="x", pady=(14, 0))
         self.protocol("WM_DELETE_WINDOW", lambda: self.close("later"))
         self.bind("<Escape>", lambda e: self.close("later"))
+        if getattr(app, "prompts", False):
+            self.from_clipboard()
+
+    def from_clipboard(self):
+        """剪貼簿裡已經有團隊設定碼（剛從 LINE / email 複製）→ 直接帶進來測試，不用再按貼上。"""
+        from ..etching import gsync
+        try:
+            text = self.clipboard_get()
+        except tk.TclError:
+            return False
+        if gsync.CODE_PREFIX not in str(text):
+            return False
+        self.entry_var.set(str(text).strip())
+        return self.use_text(text)
 
     def paste(self):
         try:

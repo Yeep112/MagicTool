@@ -1446,6 +1446,34 @@ def _gui_sheet_setup(app, root, pump, dlg, code):
         else:
             app.state["etch_sheet_prompt"] = st
         assert app.prompts is False and app._maybe_sheet_prompt() is None, "自我測試時不應該跳出提示"
+        # 團隊設定檔（team_sheet_secret.txt）：工具資料夾裡有這個檔 → 還沒設定寫入的電腦打開就自動接上
+        troot = tempfile.mkdtemp(prefix="magic_team_")
+        assert gsync.read_team_file(troot) is None
+        tp = gsync.write_team_file({"etching": {"gsheet_key": "https://docs.google.com/spreadsheets/d/TEST/edit#gid=0",
+                                                "gsheet_worksheet": "etching rate", "gsheet_token": "teamfile",
+                                                "gsheet_script_url": "https://script.google.com/macros/s/TEST/exec"}},
+                                   troot)
+        assert os.path.basename(tp) == gsync.TEAM_FILE and "secret" in gsync.TEAM_FILE
+        new = gsync.team_defaults({"etching": {}}, {}, troot)
+        assert new and new["etching"]["gsheet_token"] == "teamfile" and new["etching"]["gsheet_enabled"]
+        assert gsync.team_defaults({"etching": {}}, {"etch_team_file": "applied"}, troot) is None, "套用過就不再套用"
+        assert gsync.team_defaults(new, {}, troot) is None, "已經可以寫入就不覆蓋"
+        assert gsync.team_defaults({"etching": {"gsheet_script_url": "https://x/exec"}}, {}, troot) is None, \
+            "自己填過 Apps Script 網址就不覆蓋"
+        old_set, old_state = app.settings, dict(app.state)
+        app.settings = {"etching": {}}
+        app.state.pop("etch_team_file", None)
+        try:
+            assert app._apply_team_file(troot) and app.settings["etching"]["gsheet_token"] == "teamfile"
+            assert app.state["etch_team_file"] == "applied" and not SS.should_prompt(app)
+            assert not app._apply_team_file(troot), "同一台只套用一次"
+        finally:
+            app.settings = old_set
+            app.state.clear()
+            app.state.update(old_state)
+            from .core import settings as _S
+            _S.save_settings(old_set)
+        shutil.rmtree(troot, ignore_errors=True)
     finally:
         app.apply_settings = real_apply
 

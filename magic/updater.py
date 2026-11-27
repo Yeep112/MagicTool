@@ -396,7 +396,7 @@ def bump_patch(version):
     return f"{major}.{minor}.{patch + 1}"
 
 
-PERSONAL_FILES = ("settings.toml", "gui_state.json", "service_account.json")
+PERSONAL_FILES = ("settings.toml", "gui_state.json", "service_account.json", "team_sheet_secret.txt")
 
 
 def run_selftest(root, log=print, python=None):
