@@ -1132,7 +1132,8 @@ def _gui_03(app, root, pump, ep):
         assert not c.get_visible(), "換成縮放 / 平移時圓圈要消失"
         ed.brush_var.set("10")
         # ---- 🔍 找尖峰：在記憶體裡的光譜加 3 個尖峰（1、2、3 點寬）→ 找到 → 擦掉（一步）→ 復原
-        y0 = ed.y.copy()
+        y0 = ed.y
+        ed.y = ed.y.copy()                                   # 讀進來的資料是唯讀的：測試用一份可以改的
         sp = {nx // 5: [400], nx // 2: [300, 350], 4 * nx // 5: [250, 500, 260]}
         for i0, hs in sp.items():
             ed.y[i0:i0 + len(hs)] += hs
@@ -1149,7 +1150,7 @@ def _gui_03(app, root, pump, ep):
         ed.find_spikes()
         ed.cancel_spikes()
         assert ed.spikes is None and app.raman_edits.count(ed.path)[0] == 0
-        ed.y[:] = y0
+        ed.y = y0
         assert ed.find_spikes() == 0 and ed.spikes is None, "原本的合成光譜（只有真的峰）不應該找到尖峰"
         # ---- 螢幕縮放（例如 150%）時圖不能比畫布大（以前會跑版、下面被切掉）
         cv = ed.canvas
