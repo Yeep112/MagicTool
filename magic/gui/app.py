@@ -35,7 +35,7 @@ from .page import Page
 from .samples_page import COLOR as SAMPLES_COLOR
 from .samples_page import KEY as SAMPLES
 from .samples_page import SamplePage
-from .widgets import NavBar, Paned, card
+from .widgets import NavBar, Paned, card, auto_wrap
 
 VIEW_DEFAULTS = dict(size_mode="填滿視窗", fig_w=1100, fig_h=650, grid=True, font="中",
                      xlabel=12, ylabel=12, cbar=12, ticks=10, legend=8, title=11, suptitle=15,
@@ -96,6 +96,8 @@ class App:
     def __init__(self, root, open_path=None, check_updates=True):
         _install_safe_variable_del()
         self.root = root
+        # 每個小視窗（精靈、編修、對話框）第一次出現時，裡面的長文字設成放不下就換行
+        root.bind_class("Toplevel", "<Map>", self._wrap_toplevel, add="+")
         self.dead = False
         self.settings = S.load_settings()
         self.state = S.load_gui_state()
@@ -227,6 +229,7 @@ class App:
             for f in p.frames():
                 f.grid(row=0, column=0, sticky="nsew")
                 f.grid_remove()
+                auto_wrap(f, 12)           # 文字放不下就換行（不同字型、螢幕縮放也不會被切掉）
             p.restore()
         return p
 
@@ -264,6 +267,16 @@ class App:
                 self.root.after(120, self._prebuild)
                 return
         self.root.after(300, self._settle_gc)
+
+    def _wrap_toplevel(self, e):
+        w = e.widget
+        if getattr(w, "_auto_wrapped", False) or not isinstance(w, tk.Toplevel):
+            return
+        w._auto_wrapped = True
+        try:
+            auto_wrap(w, 12)
+        except tk.TclError:
+            pass
 
     def _settle_gc(self):
         """頁面都建好了：回收一次，再把常駐的物件（模組、介面元件）凍結起來。

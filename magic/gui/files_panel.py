@@ -9,7 +9,7 @@ import tkinter as tk
 from tkinter import filedialog, ttk
 
 from . import theme as T
-from .widgets import Chip, section_title, fit_label
+from .widgets import Chip, section_title
 
 KIND_NAMES = {"PPMS": "PPMS", "SQUID": "SQUID", "QD": "QD", "Raman": "光譜", "?": "?", "": "…"}
 
@@ -46,10 +46,18 @@ class FilePanel(tk.Frame):
         ttk.Button(fr, text="↻", width=3, style=f"{key}.Small.TButton", command=self.rescan).pack(side="right", padx=(4, 0))
         ttk.Button(fr, text="選檔案", style=f"{key}.Small.TButton", command=self.pick_files).pack(side="right", padx=(4, 0))
         ttk.Button(fr, text="選資料夾", style=f"{key}.Small.TButton", command=self.pick_folder).pack(side="right", padx=(4, 0))
+        # 路徑通常沒有空白、沒辦法換行：改成依實際寬度從前面省略（「…\資料夾\子資料夾」），滑鼠停上去看完整路徑
         self.folder_lab = tk.Label(fr, text="（還沒有選資料夾）", bg=T.CHIP, fg=T.MUTED, font=T.font(9), anchor="w",
-                                   justify="left", padx=8, pady=4)
+                                   justify="left", padx=8, pady=4, width=1)
         self.folder_lab.pack(side="left", fill="x", expand=True)
-        fit_label(self.folder_lab, 16)
+        self.folder_lab._fit_label = True
+        self.folder_lab.bind("<Configure>", lambda e: self._show_folder(), add="+")
+        self._folder_tip = None
+        try:
+            from .params_panel import Tooltip
+            self._folder_tip = Tooltip(self.folder_lab, "")
+        except Exception:
+            pass
 
         ff = tk.Frame(self, bg=T.CARD)
         ff.pack(fill="x", pady=(0, 4))
@@ -115,13 +123,42 @@ class FilePanel(tk.Frame):
     def set_folder(self, folder, select=None):
         folder = os.path.normpath(folder)
         self.folder = folder
-        self.folder_lab.configure(text=self._short(folder), fg=T.TEXT)
+        self.folder_lab.configure(fg=T.TEXT)
+        self._show_folder()
         self.page.remember(folder=folder)
         self.rescan(select=select)
 
     @staticmethod
     def _short(path, n=60):
         return path if len(path) <= n else "…" + path[-(n - 1):]
+
+    def _show_folder(self):
+        """路徑依目前寬度省略前面（放得下就顯示完整路徑）。"""
+        if not self.folder:
+            return
+        import tkinter.font as tkfont
+        lab = self.folder_lab
+        if self._folder_tip is not None:
+            self._folder_tip.text = self.folder
+        try:
+            f = tkfont.Font(root=lab, font=lab.cget("font"))
+            avail = lab.winfo_width() - 2 * int(float(str(lab.cget("padx")))) - 6
+        except (tk.TclError, ValueError):
+            return
+        text = self.folder
+        if avail > 20 and f.measure(text) > avail:
+            lo, hi = 1, len(text)                  # 二分搜尋：保留最多尾端字元
+            while lo < hi:
+                mid = (lo + hi + 1) // 2
+                if f.measure("…" + text[-mid:]) <= avail:
+                    lo = mid
+                else:
+                    hi = mid - 1
+            text = "…" + text[-lo:]
+        elif avail <= 20:
+            text = self._short(text)
+        if str(lab.cget("text")) != text:
+            lab.configure(text=text)
 
     def rescan(self, select=None):
         if not self.folder:

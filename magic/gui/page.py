@@ -91,7 +91,8 @@ class Page:
         bf.add(ttk.Button(bf, text="存圖", style=f"{key}.Ghost.TButton", command=self.save_figure))
         bf.add(ttk.Button(bf, text="匯出結果", style=f"{key}.Ghost.TButton", command=self.export))
         if key in ("PPMS", "SQUID"):
-            bf.add(ttk.Button(bf, text="📌 寫到樣品", style=f"{key}.Ghost.TButton", command=self.write_to_sample))
+            bf.add(ttk.Button(bf, text="📌 寫到樣品", style=f"{key}.Ghost.TButton", command=self.write_to_sample),
+                   compact="📌")
         self.auto_var = tk.BooleanVar(value=self.st.get("auto", True))
         bf.add(ttk.Checkbutton(bf, text="自動重畫", variable=self.auto_var, style=f"{key}.TCheckbutton",
                                command=lambda: self.remember(auto=bool(self.auto_var.get()))), side="right")

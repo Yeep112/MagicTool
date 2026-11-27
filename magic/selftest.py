@@ -958,6 +958,11 @@ def run_gui(rep, timeout=90):
         for i in range(7):
             wz.select_stage(i)
             root.update()
+            _audit_window(wz, f"Etching 精靈（第 {i + 1} 段）", root)
+        aw = wz.import_afm("mat_out")
+        aw._no_ask = True                      # 不要跳出選檔視窗（雲端沒有人按）
+        _audit_window(aw, "AFM 匯入", root)
+        aw.destroy()
         wz.focus_field("mat_out")
         pump(lambda: False, 0.5)              # 讓切換頁面時排隊的重畫先做完，只量動畫本身
         frame = []
@@ -992,7 +997,10 @@ def run_gui(rep, timeout=90):
             pass
         return
     def layout():
-        bad = stats.get("layout") or []
+        bad = list(stats.get("layout") or [])
+        for b in _LAYOUT_EXTRA:
+            if b not in bad:
+                bad.append(b)
         if bad:
             raise AssertionError(f"{len(bad)} 個地方被切掉或超出視窗：\n      " + "\n      ".join(bad[:40]))
         return "小視窗與大視窗：每一頁、每個對話框都沒有被切掉"
@@ -1046,6 +1054,26 @@ def _texts(w):
     for c in w.winfo_children():
         out += _texts(c)
     return out
+
+
+_LAYOUT_EXTRA = []          # 其他小視窗（Etching 精靈、Raman 編修、AFM 匯入、峰標註）的排版問題
+
+
+def _audit_window(win, name, root):
+    """小視窗的排版：原本大小、縮到最小的大小，各看一次。"""
+    try:
+        root.update()
+        _LAYOUT_EXTRA.extend(_layout_audit(win, name))
+        mw, mh = win.minsize()
+        if mw > 1 and mh > 1:
+            geo = win.geometry()
+            win.geometry(f"{mw}x{mh}")
+            root.update()
+            _LAYOUT_EXTRA.extend(_layout_audit(win, f"{name}（縮到最小 {mw}×{mh}）"))
+            win.geometry(geo)
+            root.update()
+    except Exception as e:
+        _LAYOUT_EXTRA.append(f"{name}：排版檢查失敗 {e}")
 
 
 _TEXTY = {"Label", "TLabel", "Button", "TButton", "Checkbutton", "TCheckbutton", "Radiobutton", "TRadiobutton"}
@@ -1124,6 +1152,24 @@ def _gui_layout(app, root, pump):
     from .gui.settings_dialog import SettingsDialog
     from .testdata import write_samples
     bad = []
+    # 按鈕列：很窄時先改成只顯示圖示（同一行），變寬再顯示完整文字
+    import tkinter as tk
+    from tkinter import ttk as _ttk
+    from .gui.widgets import WrapRow
+    tw = tk.Toplevel(root)
+    row = WrapRow(tw)
+    row.pack(fill="x")
+    full = ["＋ 新增步驟", "✎ 編輯", "🗑 刪除"]
+    btns = [row.add(_ttk.Button(row, text=t), compact=t.split(" ")[0], side="right") for t in full]
+    tw.geometry("170x60")
+    pump(lambda: False, 0.3)
+    if [b.cget("text") for b in btns] != ["＋", "✎", "🗑"] or len(row._plan[0]) != 1:
+        bad.append(f"按鈕列很窄時沒有改成只顯示圖示（{[b.cget('text') for b in btns]}，{len(row._plan[0])} 行）")
+    tw.geometry("700x60")
+    pump(lambda: False, 0.3)
+    if [b.cget("text") for b in btns] != full:
+        bad.append("按鈕列變寬後沒有恢復完整文字")
+    tw.destroy()
     old_geo = root.geometry()
     pg = app.page("Samples")
     p = write_samples(tempfile.mkdtemp(prefix="magic_layout_"))
@@ -1500,6 +1546,19 @@ def _gui_samples_visual(app, root, pump, pg, p):
         root.update()
     per = (time.perf_counter() - t0) / 4
     assert per < 1.5, f"示意圖一步要畫 {per:.2f} 秒"
+    # 放大剖面 / 放大俯視 / 兩張
+    pg.set_vis_zoom("section")
+    root.update()
+    assert len(fig.axes) == 1 and pg.vis["top_ax"] is None, "放大剖面：只畫剖面"
+    pg.set_vis_zoom("top")
+    root.update()
+    assert len(fig.axes) == 1 and pg.vis["top_ax"] is fig.axes[0], "放大俯視：只畫俯視"
+    pg.set_vis_zoom("section")
+    pg.start_cut()
+    assert pg.vis_zoom() == "both", "放大剖面時按切線 → 自動切回兩張（才點得到俯視圖）"
+    pg._cut_pts = None
+    root.update()
+    assert len(fig.axes) == 2
     pg.vis_goto(0)
     pg.toggle_play()
     assert pump(lambda: pg.vis_step >= 2, 6), "播放動畫沒有前進"
@@ -1809,6 +1868,7 @@ def _gui_03(app, root, pump, ep):
         # ---- Raman 編修
         ed = pg.open_raman_editor()
         pump(lambda: ed.x is not None, 5)
+        _audit_window(ed, "Raman 編修", root)
         import numpy as np
         i = int(np.argmax(ed.y))
         n = ed.erase_box(ed.x[i] - 3, ed.x[i] + 3, ed.y[i] * 0.98, ed.y[i] * 1.02, ed.y)
@@ -1916,6 +1976,7 @@ def _gui_03(app, root, pump, ep):
         assert pump(lambda: pg.busy is None and pg.last and pg.last["analysis"].name == "石墨烯 G / 2D 峰"
                     and len(pg.last["items"]) == 1, 20)
         dlg = pg.open_peak_labels()
+        _audit_window(dlg, "峰標註", root)
         dlg.add("D'", 1620.0)
         dlg.tree.selection_set("G")
         root.update()
@@ -2098,6 +2159,9 @@ def main(gui=True, log=print, require_gui=False):
     os.environ.setdefault("MPLBACKEND", "Agg")
     rep = Report(log)
     rep.require_gui = require_gui
+    if os.environ.get("GITHUB_ACTIONS"):                           # 雲端：卡住 20 分鐘就印出卡在哪裡
+        import faulthandler
+        faulthandler.dump_traceback_later(1200, exit=True)
     rep.perf = None
     log(f"Magic Tool 自我測試（{TOOL_ROOT}）" + ("　［發佈前檢查：含實際開視窗與流暢度］" if require_gui else ""))
     try:

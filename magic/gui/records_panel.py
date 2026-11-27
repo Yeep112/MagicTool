@@ -50,9 +50,10 @@ class RecordsPanel(tk.Frame):
         bar.add(cb)
         cb.bind("<<ComboboxSelected>>", lambda e: self.reload())
         sync_b = ttk.Button(bar, text="☁ 同步", style=f"{key}.Small.TButton", command=self.sync_dialog)
-        bar.add(sync_b)
         from .params_panel import Tooltip
-        Tooltip(sync_b, "比對本機 CSV 和 Google Sheet：把 Google Sheet 的舊紀錄加到本機，或把本機的紀錄補上傳")
+        Tooltip(sync_b, "☁ 同步：比對本機 CSV 和 Google Sheet：把 Google Sheet 的舊紀錄加到本機，或把本機的紀錄補上傳")
+        sync_b._has_tip = True
+        bar.add(sync_b, compact="☁")
         bar2 = WrapRow(self, bg=T.CARD, padx=4)
         bar2.pack(fill="x", pady=(0, 4))
         for text, cmd, tip in (("✎ 修改", self.edit_selected, "修改選取的那一筆（也可以在表格上雙擊）；修改前的值會留在修改歷史"),
@@ -61,9 +62,12 @@ class RecordsPanel(tk.Frame):
                                ("🖼 OM", self.show_om, "看選取那一筆的蝕刻前 / 後 OM 照片"),
                                ("複製條件", self.new_from_selected, "用選取那一筆的條件開新紀錄（量測值留空）"),
                                ("匯出 Excel", self.export_xlsx, "")):
-            b = bar2.add(ttk.Button(bar2, text=text, style=f"{key}.Small.TButton", command=cmd))
+            b = ttk.Button(bar2, text=text, style=f"{key}.Small.TButton", command=cmd)
             if tip:
-                Tooltip(b, tip)
+                Tooltip(b, f"{text}：{tip}")
+                b._has_tip = True
+            icon = text.split(" ")[0]
+            bar2.add(b, compact=icon if icon != text else None)       # 很窄時只顯示圖示，滑鼠停上去看說明
 
         self.path_lab = tk.Label(self, text="", bg=T.CHIP, fg=T.MUTED, font=T.font(9), anchor="w", justify="left",
                                  padx=8, pady=3)
@@ -82,8 +86,8 @@ class RecordsPanel(tk.Frame):
         ttk.Entry(ff, textvariable=self.filter_var).pack(side="left", fill="x", expand=True)
         self.filter_var.trace_add("write", lambda *a: self._schedule_filter())
         self._filter_job = None
-        tk.Label(self, text="篩選：輸入 ICP、SF6、60W… 多個條件用空白分開；沒選任何列 = 畫篩選後的全部",
-                 bg=T.CARD, fg=T.FAINT, font=T.font(8), anchor="w").pack(fill="x")
+        fit_label(tk.Label(self, text="篩選：輸入 ICP、SF6、60W… 多個條件用空白分開；沒選任何列 = 畫篩選後的全部",
+                           bg=T.CARD, fg=T.FAINT, font=T.font(8), anchor="w", justify="left")).pack(fill="x")
 
         tf = tk.Frame(self, bg=T.CARD)
         tf.pack(fill="both", expand=True, pady=(4, 0))

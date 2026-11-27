@@ -168,7 +168,8 @@ class SamplePage:
         br.pack(fill="x")
         br.add(ttk.Button(br, text="選資料夾", style=f"{KEY}.Small.TButton", command=self.pick_root))
         br.add(ttk.Button(br, text="↻", width=3, style=f"{KEY}.Small.TButton", command=self.rescan))
-        br.add(ttk.Button(br, text="⚙ 樣品設定", style=f"{KEY}.Small.TButton", command=self.open_settings), side="right")
+        br.add(ttk.Button(br, text="⚙ 樣品設定", style=f"{KEY}.Small.TButton", command=self.open_settings), side="right",
+               compact="⚙")
         fr = tk.Frame(self.left, bg=T.CARD)
         fr.pack(fill="x", pady=(8, 4))
         tk.Label(fr, text="⌕", bg=T.CARD, fg=T.MUTED, font=T.font(11)).pack(side="left", padx=(0, 4))
@@ -201,7 +202,8 @@ class SamplePage:
         b0 = WrapRow(bf, bg=T.CARD, padx=6)
         b0.pack(fill="x", pady=(0, 6))
         b0.add(ttk.Button(b0, text="＋ 新樣品", style=f"{KEY}.Ghost.TButton", command=self.open_new_sample), expand=True)
-        self.sync_btn = b0.add(ttk.Button(b0, text="☁ 試算表", style=f"{KEY}.Ghost.TButton", command=self.open_sync))
+        self.sync_btn = b0.add(ttk.Button(b0, text="☁ 試算表", style=f"{KEY}.Ghost.TButton", command=self.open_sync),
+                               compact="☁")
         ttk.Button(bf, text="📥 從試算表匯入", style=f"{KEY}.Accent.TButton", command=self.open_import).pack(fill="x")
         b2 = WrapRow(bf, bg=T.CARD, padx=6)
         b2.pack(fill="x", pady=(6, 0))
@@ -229,15 +231,17 @@ class SamplePage:
         cbtn.pack(fill="x", pady=(8, 0))
         self.cbtn = cbtn
         self.open_btn = cbtn.add(ttk.Button(cbtn, text="📂 開啟樣品資料夾", style=f"{KEY}.Small.TButton",
-                                            command=self.open_sample_dir))
-        self.ppt_btn = cbtn.add(ttk.Button(cbtn, text="📤 匯出 PPT", style=f"{KEY}.Small.TButton", command=self.open_export))
+                                            command=self.open_sample_dir), compact="📂")
+        self.ppt_btn = cbtn.add(ttk.Button(cbtn, text="📤 匯出 PPT", style=f"{KEY}.Small.TButton", command=self.open_export),
+                                compact="📤 PPT")
         self.make_btn = cbtn.add(ttk.Button(cbtn, text="建立紀錄檔", style=f"{KEY}.Small.TButton", command=self.create_record))
         cbtn.set_visible(self.make_btn, False)
         self.hold_btn = cbtn.add(ttk.Button(cbtn, text="⏸ 擱置", style=f"{KEY}.Small.TButton",
                                             command=lambda: self.toggle_state("hold")))
         self.ab_btn = cbtn.add(ttk.Button(cbtn, text="✕ 放棄", style=f"{KEY}.Small.TButton",
                                           command=lambda: self.toggle_state("abandoned")))
-        self.res_btn = cbtn.add(ttk.Button(cbtn, text="✎ 結果", style=f"{KEY}.Small.TButton", command=self.open_results))
+        self.res_btn = cbtn.add(ttk.Button(cbtn, text="✎ 結果", style=f"{KEY}.Small.TButton", command=self.open_results),
+                                compact="✎")
         self.prev_lab = fit_label(tk.Label(self.mid, text="", bg=T.CARD, fg=T.WARNING, font=T.font(9), anchor="w",
                                            justify="left", wraplength=T.px(440)))
         self.prev_lab.pack(fill="x", pady=(6, 0))
@@ -257,7 +261,7 @@ class SamplePage:
                          ("↑", lambda: self.move_selected(-1)), ("↓", lambda: self.move_selected(1)),
                          ("🗑", self.delete_selected_step)):
             b = ttk.Button(th, text=txt, style=f"{KEY}.Small.TButton", command=cmd, **({} if len(txt) > 2 else {"width": 3}))
-            th.add(b, side="right")
+            th.add(b, side="right", compact=txt.split(" ")[0] if len(txt) > 2 else None)   # 很窄時只顯示圖示
             self.tl_btns.append(b)
         tf = tk.Frame(tlf, bg=T.CARD)
         tf.pack(fill="both", expand=True)
@@ -279,8 +283,9 @@ class SamplePage:
         rh.pack(fill="x", pady=(6, 2))
         self.rv_title = rh.add(tk.Label(rh, text="⚠ 待確認", bg=T.CARD, fg=T.WARNING, font=T.font(10, "bold")))
         self.rv_edit = rh.add(ttk.Button(rh, text="✎ 修改這一步", style=f"{KEY}.Small.TButton",
-                                         command=self.edit_review_step), side="right")
-        rh.add(ttk.Button(rh, text="✓ 已確認", style=f"{KEY}.Small.TButton", command=self.resolve_selected), side="right")
+                                         command=self.edit_review_step), side="right", compact="✎")
+        rh.add(ttk.Button(rh, text="✓ 已確認", style=f"{KEY}.Small.TButton", command=self.resolve_selected), side="right",
+               compact="✓")
         self.rv_full = fit_label(tk.Label(rvf, text="", bg=T.CARD, fg=T.TEXT, font=T.font(9), anchor="w",
                                           justify="left", wraplength=T.px(440)))
         self.rv_full.pack(side="bottom", fill="x", pady=(4, 0))      # 先放：區塊變矮時縮的是清單，不是這段說明
@@ -1033,18 +1038,26 @@ class SamplePage:
         v["next"] = ttk.Button(ctl, text="▶", width=3, style=f"{KEY}.Small.TButton", command=lambda: self.vis_step_by(1))
         v["last"] = ttk.Button(ctl, text="⏭", width=3, style=f"{KEY}.Small.TButton", command=lambda: self.vis_goto(None))
         for w in ("first", "prev", "play", "next", "last"):
-            ctl.add(v[w])
+            ctl.add(v[w], compact="▶" if w == "play" else None)
         v["cut"] = ttk.Button(ctl, text="✂ 切線", style=f"{KEY}.Small.TButton", command=self.start_cut)
         v["auto_cut"] = ttk.Button(ctl, text="↺ 自動", style=f"{KEY}.Small.TButton", command=lambda: self.set_cut(None))
         v["save"] = ttk.Button(ctl, text="存圖", style=f"{KEY}.Small.TButton", command=self.save_visual)
-        for w in ("cut", "auto_cut", "save"):
-            ctl.add(v[w], side="right")
+        for w, short in (("cut", "✂"), ("auto_cut", "↺"), ("save", "💾")):
+            ctl.add(v[w], side="right", compact=short)
         v["scale"] = tk.Scale(fr, from_=0, to=1, orient="horizontal", showvalue=False, bg=T.CARD, highlightthickness=0,
                               troughcolor=T.CHIP, bd=0, sliderrelief="flat", command=self._on_scale)
         v["scale"].pack(side="bottom", fill="x")
         v["cap"] = fit_label(tk.Label(fr, text="", bg=T.CARD, fg=T.TEXT, font=T.font(10, "bold"), anchor="w",
                                       justify="left", wraplength=self._wl()))
         v["cap"].pack(side="bottom", fill="x")
+        # 看哪一張：兩張 / 放大剖面 / 放大俯視
+        zr = WrapRow(fr, bg=T.CARD, padx=4)
+        zr.pack(side="top", fill="x", pady=(0, 4))
+        zr.add(tk.Label(zr, text="顯示", bg=T.CARD, fg=T.MUTED, font=T.font(9)))
+        v["zoom"] = {}
+        for mode, txt in (("both", "兩張"), ("section", "放大剖面"), ("top", "放大俯視")):
+            v["zoom"][mode] = zr.add(ttk.Button(zr, text=txt, style=f"{KEY}.Small.TButton",
+                                                command=lambda m=mode: self.set_vis_zoom(m)))
         # 圖放在可以上下捲動的區塊裡：寬度跟著欄位、高度依內容（螢幕矮的時候往下捲，不會被切掉）
         v["sf"] = ScrollFrame(fr)
         v["sf"].pack(fill="both", expand=True)
@@ -1057,11 +1070,34 @@ class SamplePage:
         from .widgets import keep_figure_fit
         v["fit"] = keep_figure_fit(v["canvas"])          # 螢幕縮放（125%、150%）時圖不會比畫布大而被切掉
         v["sf"].canvas.bind("<Configure>", lambda e: self._vis_resize(e.width), add="+")
+        self._mark_zoom(v)
         self.vis = v
 
+    def vis_zoom(self):
+        return self.st.get("vis_zoom", "both")
+
+    def set_vis_zoom(self, mode):
+        """兩張 / 放大剖面 / 放大俯視。"""
+        self.st["vis_zoom"] = mode
+        if self.vis:
+            self._mark_zoom(self.vis)
+            self._vis_draw()
+            self.vis["sf"].canvas.yview_moveto(0)
+        self.app.save_state_soon()
+
+    def _mark_zoom(self, v):
+        for m, b in v["zoom"].items():
+            b.configure(style=f"{KEY}.Accent.TButton" if m == self.vis_zoom() else f"{KEY}.Small.TButton")
+
     def _vis_size(self, width):
-        """圖的大小（像素）：剖面約寬的 0.45、俯視約寬的 0.6（沒有輪廓檔只留一行字的高度）。"""
+        """圖的大小（像素）：剖面約寬的 0.45、俯視約寬的 0.6（沒有輪廓檔只留一行字的高度）；
+        放大其中一張時那一張變大、另一張不畫。"""
         has_top = bool(self.sample and any(not o.get("electrode") for o in self._outlines.get(self.sample["key"], [])))
+        z = self.vis_zoom()
+        if z == "section":
+            return width, max(T.px(320), int(width * 0.8)), (1, 0)
+        if z == "top":
+            return width, (max(T.px(320), int(width * 0.95)) if has_top else T.px(140)), (0, 1)
         h1 = max(T.px(220), int(width * 0.46))
         h2 = max(T.px(200), int(width * 0.62)) if has_top else T.px(90)
         return width, h1 + h2, (h1, h2)
@@ -1136,12 +1172,20 @@ class SamplePage:
             self._vis_apply_size()
             v["fit"]()
         _, _, (h1, h2) = self._vis_size(max(v["w"], 400))
-        gs = fig.add_gridspec(2, 1, height_ratios=[h1, h2])
+        v["top_ax"] = None
         try:
             outs = self.outlines(self.sample)
-            V.draw_section(fig.add_subplot(gs[0]), rec, i if steps else None, highlight=True, outlines=outs)
-            v["top_ax"] = fig.add_subplot(gs[1])
-            V.draw_top(v["top_ax"], rec, outs, i if steps else None)
+            if h1 and h2:
+                gs = fig.add_gridspec(2, 1, height_ratios=[h1, h2])
+                ax_s, ax_t = fig.add_subplot(gs[0]), fig.add_subplot(gs[1])
+            else:
+                ax_s = fig.add_subplot(111) if h1 else None
+                ax_t = fig.add_subplot(111) if h2 else None
+            if ax_s is not None:
+                V.draw_section(ax_s, rec, i if steps else None, highlight=True, outlines=outs)
+            if ax_t is not None:
+                v["top_ax"] = ax_t
+                V.draw_top(ax_t, rec, outs, i if steps else None)
             fig.tight_layout(pad=0.6)
         except Exception as e:                                   # 示意圖畫不出來不要影響其他功能
             self.app.log(f"示意圖：{e}")
@@ -1160,8 +1204,10 @@ class SamplePage:
         if not any(not o.get("electrode") for o in self.outlines(self.sample)):
             self.app.status("這個樣品沒有 digitalize 的 flake 輪廓檔，剖面是示意版面，不能設定切線", "warn")
             return
+        if self.vis_zoom() == "section":                    # 切線要在俯視圖上點：放大剖面時先切回兩張
+            self.set_vis_zoom("both")
         self._cut_pts = []
-        self.vis["cap"].configure(text="✂ 在下面的俯視圖上點兩下：先點起點 A、再點終點 A'（按「↺ 自動」恢復自動切線）")
+        self.vis["cap"].configure(text="✂ 在俯視圖上點兩下：先點起點 A、再點終點 A'（按「↺ 自動」恢復自動切線）")
 
     def _on_vis_click(self, ev):
         if self._cut_pts is None or ev.inaxes is None or ev.inaxes is not self.vis.get("top_ax") or ev.xdata is None:

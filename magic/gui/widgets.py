@@ -176,8 +176,20 @@ class WrapRow(tk.Frame):
         self._width = 0
         self.bind("<Configure>", self._on_conf, add="+")
 
-    def add(self, w, side="left", expand=False, padx=None):
+    def add(self, w, side="left", expand=False, padx=None, compact=None):
+        """compact = 很窄時改顯示的短字（通常是圖示，例如 "🗑"）；滑鼠停上去會顯示完整文字。"""
         self._items.append((w, side, expand, self.padx if padx is None else padx))
+        if compact:
+            full = str(w.cget("text"))
+            self._compact = getattr(self, "_compact", {})
+            self._compact[w] = (full, compact)
+            if not getattr(w, "_has_tip", False):
+                try:
+                    from .params_panel import Tooltip
+                    Tooltip(w, full)
+                    w._has_tip = True
+                except Exception:
+                    pass
         self._plan = None
         self._relayout()
         return w
@@ -197,8 +209,40 @@ class WrapRow(tk.Frame):
             self._width = e.width
             self._relayout()
 
+    def _set_compact(self, on):
+        comp = getattr(self, "_compact", {})
+        if not comp or getattr(self, "_is_compact", False) == on:
+            return
+        self._is_compact = on
+        for w, (full, short) in comp.items():
+            try:
+                w.configure(text=short if on else full)
+                if w.winfo_class() == "TButton":
+                    # ttk 按鈕有預設最小寬度（約 11 個字），只換文字不會變窄：只顯示圖示時把最小寬度拿掉
+                    if on:
+                        if not hasattr(w, "_full_width"):
+                            w._full_width = w.cget("width")
+                        w.configure(width=-1)
+                    elif hasattr(w, "_full_width"):
+                        w.configure(width=w._full_width)
+            except tk.TclError:
+                pass
+
+    def _total(self):
+        hidden = getattr(self, "_hidden", set())
+        return sum(w.winfo_reqwidth() + px for w, _, _, px in self._items if w not in hidden)
+
     def _relayout(self):
         width = self._width if self._width > 1 else 10 ** 6
+        if getattr(self, "_compact", None) and self._width > 1:
+            # 放不下一行：先改成只顯示圖示；還是放不下才換行。變寬時多留一點空間再換回完整文字（不會一直跳）
+            if not getattr(self, "_is_compact", False):
+                if self._total() > width:
+                    self._set_compact(True)
+            else:
+                self._set_compact(False)
+                if self._total() + 12 > width:
+                    self._set_compact(True)
         rows, used = [[]], 0
         hidden = getattr(self, "_hidden", set())
         for i, (w, side, exp, px) in enumerate(self._items):
@@ -210,7 +254,7 @@ class WrapRow(tk.Frame):
                 used = 0
             rows[-1].append(i)
             used += need
-        plan = tuple(tuple(r) for r in rows)
+        plan = (tuple(tuple(r) for r in rows), getattr(self, "_is_compact", False))
         if plan == self._plan:
             return
         self._plan = plan
@@ -239,35 +283,62 @@ class WrapRow(tk.Frame):
 
 
 def fit_label(label, pad=2):
-    """文字跟著實際寬度換行（欄位變窄時不會被切掉）。"""
+    """文字跟著實際寬度換行（欄位變窄時不會被切掉）。
+
+    只有「真的被擠到」（分到的寬度比需要的小）才換行；欄位變寬時再放寬或取消換行。
+    不會因為換行後變窄又再縮一次（避免越縮越小的循環）；同一個元件調整次數有上限。"""
+    import tkinter.font as tkfont
+
+    def natural():
+        try:
+            f = tkfont.Font(root=label, font=label.cget("font"))
+            return max((f.measure(x) for x in str(label.cget("text")).split("\n")), default=0)
+        except (tk.TclError, ValueError):
+            return 10 ** 6
+
     def on(e):
+        n = getattr(label, "_fit_n", 0)
+        if n > 60:
+            return
         try:
             inner = 2 * (int(float(str(label.cget("padx")))) + int(float(str(label.cget("bd")))) +
                          int(float(str(label.cget("highlightthickness")))))
         except (ValueError, tk.TclError):
             inner = 0
-        w = e.width - pad - inner
-        if w > 30:
-            try:
-                cur = int(float(str(label.cget("wraplength") or 0)))
-            except (ValueError, tk.TclError):
-                cur = 0
-            if abs(cur - w) > 2:
-                label.configure(wraplength=w)
+        avail = e.width - pad - inner
+        if avail <= 30:
+            return
+        try:
+            cur = int(float(str(label.cget("wraplength") or 0)))
+        except (ValueError, tk.TclError):
+            cur = 0
+        new = None
+        if e.width + 1 < label.winfo_reqwidth():           # 被擠到 → 換行
+            new = avail
+        elif cur > 0 and avail > cur + 4:                  # 變寬了 → 放寬（整行放得下就不換行）
+            new = 0 if natural() <= avail else avail
+        if new is not None and new != cur:
+            label._fit_n = n + 1
+            label.configure(wraplength=new)
+            label.after(2000, lambda: setattr(label, "_fit_n", 0) if label.winfo_exists() else None)
+
     label.bind("<Configure>", on, add="+")
+    label._fit_label = True
     return label
 
 
 def auto_wrap(container, min_len=18):
-    """把 container 裡面的長文字 Label 都設成跟著寬度換行。"""
+    """把 container 裡面的長文字 Label 都設成跟著寬度換行（已經設過的不會重複）。"""
     for w in container.winfo_children():
-        if w.winfo_class() == "Label" and not getattr(w, "_no_wrap", False):
+        if w.winfo_class() in ("Label", "TLabel") and not getattr(w, "_no_wrap", False) \
+                and not getattr(w, "_fit_label", False):
             try:
                 text = str(w.cget("text") or "")
             except tk.TclError:
                 text = ""
             if len(text) >= min_len and not str(w.cget("image") or ""):
                 fit_label(w)
+                w._fit_label = True
         auto_wrap(w, min_len)
 
 

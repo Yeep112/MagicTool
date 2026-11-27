@@ -669,6 +669,10 @@ def _receive(log=print, ask=input, root=None, test=True, ci=ci_status, do_publis
     if not ok("merge-base", "--is-ancestor", "HEAD", pend_ref) and ok("merge-base", "--is-ancestor", "HEAD",
                                                                      f"origin/{branch}"):
         run("merge", "--ff-only", f"origin/{branch}")          # 本機落後 GitHub：先跟上
+    if not ok("merge-base", "--is-ancestor", "HEAD", pend_ref) and _only_old_pending(run, branch):
+        # 上次收更新沒有發佈、視窗又被關掉：資料夾停在舊的待發佈版本（只有 Claude 的 commit，沒有你自己的修改）
+        run("reset", "--hard", f"origin/{branch}")
+        log(f"你的資料夾停在上次沒有發佈的舊更新，已先回到 GitHub 上的 {branch}（你自己的修改不受影響：本來就沒有）")
     if not ok("merge-base", "--is-ancestor", "HEAD", pend_ref):
         log("\n待發佈的更新是接在比較舊的版本上（之後你自己又發佈或修改過），不能直接套用。")
         log("→ 跟 Claude 說：「pending 要重新接在最新的 main 上」。你的資料夾沒有改變。")
@@ -711,6 +715,15 @@ def _receive(log=print, ask=input, root=None, test=True, ci=ci_status, do_publis
         log("\n這次沒有發佈，資料夾已經恢復成收更新之前的版本（同事那邊完全沒有影響）。")
         log("把上面 ✗ 的訊息貼給 Claude 修正後，再按一次 收更新。")
     return False
+
+
+def _only_old_pending(run, branch):
+    """本機比 GitHub 的 main 多出來的 commit 是不是都是 Claude 做的（= 以前收過、但沒有發佈的待發佈更新）。"""
+    out = run("log", "--format=%ae", f"origin/{branch}..HEAD", check=False)
+    if out.returncode != 0:
+        return False
+    emails = [l.strip() for l in out.stdout.splitlines() if l.strip()]
+    return bool(emails) and all(e == "noreply@anthropic.com" for e in emails)
 
 
 def _api_json(url, timeout=10):

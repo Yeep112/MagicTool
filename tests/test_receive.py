@@ -253,3 +253,39 @@ def test_find_spikes():
     y2[2200:2204] += 100
     found2 = find_spikes(y2)
     assert (g + 12, g + 12) in found2 and not any(a >= 2200 and a < 2204 for a, b in found2), found2
+
+
+def test_stale_old_pending_is_dropped(repos):
+    """上次收更新沒發佈又把視窗關掉：資料夾停在舊的 pending（只有 Claude 的 commit）→ 先回到 main 再收新的。"""
+    origin, mine, claude = repos
+    old = push_pending(claude, "1.0.1")
+    git(mine, "fetch", "origin", "pending")
+    git(mine, "merge", "--ff-only", "origin/pending")          # 停在舊的 pending
+    subprocess.run(["git", "-C", mine, "commit", "--amend", "--no-edit", "--reset-author"], capture_output=True,
+                   env=dict(os.environ, GIT_AUTHOR_EMAIL="noreply@anthropic.com", GIT_AUTHOR_NAME="Claude",
+                            GIT_COMMITTER_EMAIL="noreply@anthropic.com", GIT_COMMITTER_NAME="Claude"))
+    git(claude, "reset", "--hard", "origin/main")               # 我把 pending 重做一次（舊的不再是祖先）
+    with open(os.path.join(claude, "b.py"), "w", encoding="utf-8") as f:
+        f.write("z = 3\n")
+    write_release(claude, "1.0.2", ["重做"])
+    git(claude, "add", "-A")
+    git(claude, "commit", "-m", "v1.0.2")
+    git(claude, "push", "-f", "origin", "HEAD:pending")
+    new = git(claude, "rev-parse", "HEAD")
+    assert old != new
+    ok, log = receive(mine)
+    assert ok, log
+    assert git(origin, "rev-parse", "main") == new
+
+
+def test_own_commits_are_kept(repos):
+    """你自己的 commit（不是 Claude 的）不會被丟掉：照舊請 Claude 重新接。"""
+    origin, mine, claude = repos
+    (open(os.path.join(mine, "mine.py"), "w")).write("m = 1\n")
+    git(mine, "add", "-A")
+    git(mine, "commit", "-m", "my own")
+    mine_head = git(mine, "rev-parse", "HEAD")
+    push_pending(claude)
+    ok, log = receive(mine)
+    assert not ok and "重新接在最新的 main" in log
+    assert git(mine, "rev-parse", "HEAD") == mine_head
