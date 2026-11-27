@@ -24,6 +24,20 @@ def section_title(parent, text, icon=None, color=None):
     return row, lab
 
 
+def set_if_changed(widget, **opts):
+    """只有設定值真的改變時才 configure：頁面每次重新顯示都會收到 <Configure>，
+    無條件重設（例如 wraplength）會讓 Tk 多排版、重畫一輪，切換機台就變慢。"""
+    changed = {}
+    for k, v in opts.items():
+        try:
+            if str(widget.cget(k)) != str(v):
+                changed[k] = v
+        except tk.TclError:
+            changed[k] = v
+    if changed:
+        widget.configure(**changed)
+
+
 class Chip(tk.Label):
     def __init__(self, parent, text="", fg=None, bg=None, **kw):
         super().__init__(parent, text=text, fg=fg or T.MUTED, bg=bg or T.CHIP, font=T.font(9, "bold"),
@@ -50,11 +64,24 @@ class ScrollFrame(tk.Frame):
         self.canvas.configure(yscrollcommand=self.sb.set)
         self.canvas.pack(side="left", fill="both", expand=True)
         self.sb.pack(side="right", fill="y")
-        self.body.bind("<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
-        self.canvas.bind("<Configure>", lambda e: self.canvas.itemconfigure(self._win, width=e.width))
+        self._sr = None
+        self._bw = None
+        self.body.bind("<Configure>", self._on_body)
+        self.canvas.bind("<Configure>", self._on_canvas)
         for w in (self.canvas, self.body):
             w.bind("<Enter>", self._bind_wheel)
             w.bind("<Leave>", self._unbind_wheel)
+
+    def _on_body(self, _=None):
+        sr = self.canvas.bbox("all")
+        if sr != self._sr:                    # 沒變就不要重設（重設會讓 Tk 再排版、重畫一次）
+            self._sr = sr
+            self.canvas.configure(scrollregion=sr)
+
+    def _on_canvas(self, e):
+        if e.width != self._bw:
+            self._bw = e.width
+            self.canvas.itemconfigure(self._win, width=e.width)
 
     def _bind_wheel(self, _=None):
         self.canvas.bind_all("<MouseWheel>", self._on_wheel)

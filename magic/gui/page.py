@@ -16,7 +16,7 @@ from ..core.plotstyle import PLOT_CYCLE
 from . import theme as T
 from .figure_panel import FigurePanel
 from .params_panel import ParamPanel
-from .widgets import FeatureList, Paned, ScrollFrame
+from .widgets import set_if_changed, FeatureList, Paned, ScrollFrame
 
 
 class Cancelled(Exception):
@@ -121,7 +121,7 @@ class Page:
         if key == "Raman":
             self.post_draw.append(self._draw_peak_labels)
         self._wrap_job = None
-        bottom.bind("<Configure>", lambda e: self.p_help.configure(wraplength=max(e.width - 10, 150)))
+        bottom.bind("<Configure>", lambda e: set_if_changed(self.p_help, wraplength=max(e.width - 10, 150)))
         if self.current:
             self._show_params(self.current)
 

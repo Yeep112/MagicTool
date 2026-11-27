@@ -125,7 +125,8 @@ class EtchWizard(tk.Toplevel):
         self.stage_text = tk.Label(parent, text="", bg=T.SUBTLE, fg=T.TEXT, font=T.font(9), justify="left",
                                    anchor="w", padx=10, pady=6, wraplength=T.px(760))
         self.stage_text.pack(fill="x", pady=(6, 4))
-        parent.bind("<Configure>", lambda e: self.stage_text.configure(wraplength=max(e.width - 30, 200)))
+        from .widgets import set_if_changed
+        parent.bind("<Configure>", lambda e: set_if_changed(self.stage_text, wraplength=max(e.width - 30, 200)))
         self.canvas = Schematic(parent, on_arrow_click=self.focus_field)
         self.canvas.pack(fill="both", expand=True)
         ctl = tk.Frame(parent, bg=T.CARD)
