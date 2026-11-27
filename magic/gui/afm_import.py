@@ -113,6 +113,8 @@ class AfmImportDialog(tk.Toplevel):
         self.ax = self.fig.add_subplot()
         self.canvas = FigureCanvasTkAgg(self.fig, master=right)
         self.canvas.get_tk_widget().pack(fill="both", expand=True, pady=(6, 0))
+        from .widgets import keep_figure_fit
+        self._fit = keep_figure_fit(self.canvas)       # 螢幕縮放時圖不會比視窗大（跑版）
         self.span = SpanSelector(self.ax, self._spanned, "horizontal", useblit=True, interactive=False,
                                  props=dict(alpha=0.2, facecolor="#2563eb"))
         self.info = tk.Label(right, text="", bg=T.CARD, fg=T.MUTED, font=T.font(9), anchor="w", justify="left",

@@ -1119,6 +1119,50 @@ def _gui_03(app, root, pump, ep):
         ed._release(mev(jj))
         assert erased(jj), "框選模式：只點一下也要擦掉滑鼠附近的點"
         ed.clear("erase")
+        # ---- 筆刷範圍圓圈：跟著滑鼠、大小 = 筆刷大小
+        ed.set_mode("brush")
+        ed.brush_var.set("14")
+        ed._motion(mev(j))
+        c = ed.brush_circle
+        assert c.get_visible() and abs(c.get_radius() - ed.brush_r()) < 1e-9, "筆刷圓圈沒有出現或大小不對"
+        cx, cy = c.center
+        px, py = ed.ax1.transData.transform((ed.x[j], ed.y[j]))
+        assert abs(cx - px) < 1 and abs(cy - py) < 1, "筆刷圓圈沒有跟著滑鼠"
+        ed.set_mode("view")
+        assert not c.get_visible(), "換成縮放 / 平移時圓圈要消失"
+        ed.brush_var.set("10")
+        # ---- 🔍 找尖峰：在記憶體裡的光譜加 3 個尖峰（1、2、3 點寬）→ 找到 → 擦掉（一步）→ 復原
+        y0 = ed.y.copy()
+        sp = {nx // 5: [400], nx // 2: [300, 350], 4 * nx // 5: [250, 500, 260]}
+        for i0, hs in sp.items():
+            ed.y[i0:i0 + len(hs)] += hs
+        n_found = ed.find_spikes()
+        want = sorted(i0 + d for i0, hs in sp.items() for d in range(len(hs)))
+        assert n_found == 3 and sorted(np.flatnonzero(ed.spikes).tolist()) == want, \
+            f"找尖峰：應該找到 3 個（{want}），結果 {np.flatnonzero(ed.spikes) if ed.spikes is not None else None}"
+        assert ed.spike_erase.winfo_manager(), "找到尖峰時要出現「擦掉」按鈕"
+        u1 = len(ed.undo_stack)
+        assert ed.erase_spikes() == len(want) and all(erased(i) for i in want), "擦掉尖峰沒有作用"
+        assert len(ed.undo_stack) == u1 + 1 and ed.spikes is None and not ed.spike_erase.winfo_manager()
+        ed.undo()
+        assert not any(erased(i) for i in want), "擦掉尖峰要能一次復原"
+        ed.find_spikes()
+        ed.cancel_spikes()
+        assert ed.spikes is None and app.raman_edits.count(ed.path)[0] == 0
+        ed.y[:] = y0
+        assert ed.find_spikes() == 0 and ed.spikes is None, "原本的合成光譜（只有真的峰）不應該找到尖峰"
+        # ---- 螢幕縮放（例如 150%）時圖不能比畫布大（以前會跑版、下面被切掉）
+        cv = ed.canvas
+        if hasattr(cv, "_set_device_pixel_ratio"):
+            cv._set_device_pixel_ratio(1.5)
+            ed._fit()
+            root.update()
+            ww, wh = cv.get_tk_widget().winfo_width(), cv.get_tk_widget().winfo_height()
+            fw, fh = cv.get_width_height(physical=True)
+            assert abs(fw - ww) <= 1 and abs(fh - wh) <= 1, f"縮放 150% 時圖 {fw}×{fh} 和畫布 {ww}×{wh} 不一樣大（跑版）"
+            cv._set_device_pixel_ratio(1.0)
+            ed._fit()
+            root.update()
         assert app.raman_edits.count(ed.path) == (0, 0)
         ed.close()
         # ---- 峰標註

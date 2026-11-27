@@ -226,3 +226,30 @@ def test_perf_history(tmp_path):
     assert slower == ["切換機台最慢"], (lines, slower)              # 50 → 90：慢 80% 而且多 40 ms
     assert any("變快" in l and "單張圖" in l for l in lines)         # 80 → 50
     assert len(perfhist.read_all(tmp_path)) == 2
+
+
+def test_find_spikes():
+    """宇宙射線尖峰：1～3 點寬的尖峰要找到；真的 Raman 峰（G、2D、hBN，再窄也好幾個點寬）不能被當成尖峰。"""
+    import numpy as np
+    from magic.raman.spikes import find_spikes, spike_mask
+    from magic.testdata import _lor
+    rng = np.random.default_rng(3)
+    x = np.arange(900.0, 3000.0, 1.05)
+    y = 280 + _lor(x, 1582, 14, 550) + _lor(x, 2690, 30, 300) + _lor(x, 1366, 9, 400) + rng.normal(0, 4, x.size)
+    clean = y.copy()
+    assert find_spikes(clean) == [], "沒有尖峰的光譜不應該找到東西（G / 2D / hBN 峰不是尖峰）"
+    spikes = {400: [60], 900: [45, 55], 1500: [40, 90, 45], 1800: [300]}     # 1、2、3 點寬，還有一個很高的
+    for i, hs in spikes.items():
+        y[i:i + len(hs)] += hs
+    found = find_spikes(y)
+    assert [a for a, b in found] == sorted(spikes), found
+    assert all(b - a + 1 == len(spikes[a]) for a, b in found), found
+    m = spike_mask(y)
+    assert m.sum() == sum(len(v) for v in spikes.values())
+    # 尖峰剛好在 G 峰旁邊也要找到；4 點寬的不算（超過最大寬度）
+    y2 = clean.copy()
+    g = int(np.argmin(np.abs(x - 1582)))
+    y2[g + 12] += 120
+    y2[2200:2204] += 100
+    found2 = find_spikes(y2)
+    assert (g + 12, g + 12) in found2 and not any(a >= 2200 and a < 2204 for a, b in found2), found2

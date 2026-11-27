@@ -24,6 +24,41 @@ def section_title(parent, text, icon=None, color=None):
     return row, lab
 
 
+def keep_figure_fit(canvas):
+    """額外視窗裡的 matplotlib 圖：視窗出現後，把圖的大小對齊畫布的實際大小。
+
+    Windows 螢幕縮放（125%、150%…）時，舊版 matplotlib 在視窗出現（<Map>）時會依縮放把圖放大，
+    但畫布被版面限制住、沒有收到 <Configure>，圖就比畫布大、下面被切掉（跑版）。
+    回傳 fit()，需要時也可以直接呼叫。"""
+    w = canvas.get_tk_widget()
+
+    def fit():
+        try:
+            ww, wh = int(w.winfo_width()), int(w.winfo_height())
+        except tk.TclError:
+            return False
+        if ww < 20 or wh < 20:
+            return False
+        try:
+            fw, fh = canvas.get_width_height(physical=True)
+        except TypeError:                      # 很舊的 matplotlib
+            fw, fh = (int(v) for v in canvas.figure.bbox.size)
+        if abs(fw - ww) <= 1 and abs(fh - wh) <= 1:
+            return False
+
+        class _Size:
+            width, height = ww, wh
+        canvas.resize(_Size())
+        canvas.draw_idle()
+        return True
+
+    def later(_=None):
+        w.after_idle(fit)
+        w.after(200, fit)                      # 有些電腦視窗出現後還會再調整一次大小
+    w.bind("<Map>", later, add="+")
+    return fit
+
+
 def set_if_changed(widget, **opts):
     """只有設定值真的改變時才 configure：頁面每次重新顯示都會收到 <Configure>，
     無條件重設（例如 wraplength）會讓 Tk 多排版、重畫一輪，切換機台就變慢。"""
