@@ -51,13 +51,16 @@ def image_size(path):
     raise ValueError(f"讀不到 JPEG 大小：{path}")
 
 
-def _rpr(size=None, bold=False, color=None, italic=False, lang="zh-TW"):
+def _rpr(size=None, bold=False, color=None, italic=False, lang="zh-TW", font=None):
     a = f'<a:rPr lang="{lang}" altLang="en-US" dirty="0"' + (f' sz="{int(size * 100)}"' if size else "") + \
         (' b="1"' if bold else ' b="0"') + (' i="1"' if italic else "") + ">"
     if color:
         a += f'<a:solidFill><a:srgbClr val="{color}"/></a:solidFill>'
-    a += f'<a:latin typeface="{LATIN}"/><a:ea typeface="{EA}"/><a:cs typeface="{LATIN}"/></a:rPr>'
-    return a
+    lat = _esc(font) if font else LATIN
+    a += f'<a:latin typeface="{lat}"/><a:ea typeface="{EA}"/><a:cs typeface="{lat}"/>'
+    if font:
+        a += f'<a:sym typeface="{lat}"/>'
+    return a + "</a:rPr>"
 
 
 def _paras(paras, size, color, bold, align, spacing=None):
@@ -70,7 +73,7 @@ def _paras(paras, size, color, bold, align, spacing=None):
         xml = f'<a:p><a:pPr algn="{al}">{sp}<a:buNone/></a:pPr>'
         for text, o in runs:
             o = o or {}
-            xml += (f'<a:r>{_rpr(o.get("size", size), o.get("bold", bold), o.get("color", color), o.get("italic", False))}'
+            xml += (f'<a:r>{_rpr(o.get("size", size), o.get("bold", bold), o.get("color", color), o.get("italic", False), font=o.get("font"))}'
                     f'<a:t>{_esc(text)}</a:t></a:r>')
         xml += f'<a:endParaRPr lang="zh-TW" sz="{int(size * 100)}" dirty="0"/></a:p>'
         out.append(xml)
@@ -90,10 +93,13 @@ class Slide:
         self._id += 1
         return self._id
 
-    def rect(self, x, y, w, h, fill="FFFFFF", line=None, radius=0.0, name="Shape", line_w=0.75):
-        geom = "roundRect" if radius else "rect"
-        adj = f'<a:avLst><a:gd name="adj" fmla="val {int(radius * 100000)}"/></a:avLst>' if radius else "<a:avLst/>"
-        ln = (f'<a:ln w="{int(line_w * 12700)}"><a:solidFill><a:srgbClr val="{line}"/></a:solidFill></a:ln>' if line
+    def rect(self, x, y, w, h, fill="FFFFFF", line=None, radius=0.0, name="Shape", line_w=0.75, dash=False,
+             ellipse=False):
+        geom = "ellipse" if ellipse else "roundRect" if radius else "rect"
+        adj = f'<a:avLst><a:gd name="adj" fmla="val {int(radius * 100000)}"/></a:avLst>' if radius and not ellipse \
+            else "<a:avLst/>"
+        dsh = '<a:prstDash val="dash"/>' if dash else ""
+        ln = (f'<a:ln w="{int(line_w * 12700)}"><a:solidFill><a:srgbClr val="{line}"/></a:solidFill>{dsh}</a:ln>' if line
               else "<a:ln><a:noFill/></a:ln>")
         fl = f'<a:solidFill><a:srgbClr val="{fill}"/></a:solidFill>' if fill else "<a:noFill/>"
         i = self._nid()
@@ -105,11 +111,16 @@ class Slide:
             f'</p:sp>')
 
     def text(self, x, y, w, h, paras, size=14, color="1F2937", bold=False, align="l", anchor="t", fill=None,
-             line=None, radius=0.0, inset=0.05, name="TextBox", spacing=None, autofit=True):
+             line=None, radius=0.0, inset=0.05, name="TextBox", spacing=None, autofit=True, ellipse=False,
+             font=None):
         if isinstance(paras, str):
             paras = paras.split("\n")
-        geom = "roundRect" if radius else "rect"
-        adj = f'<a:avLst><a:gd name="adj" fmla="val {int(radius * 100000)}"/></a:avLst>' if radius else "<a:avLst/>"
+        geom = "ellipse" if ellipse else "roundRect" if radius else "rect"
+        adj = f'<a:avLst><a:gd name="adj" fmla="val {int(radius * 100000)}"/></a:avLst>' if radius and not ellipse \
+            else "<a:avLst/>"
+        if font:
+            paras = [[(t, dict(o or {}, font=font)) for t, o in (p if isinstance(p, (list, tuple)) else [(p, {})])]
+                     for p in paras]
         fl = f'<a:solidFill><a:srgbClr val="{fill}"/></a:solidFill>' if fill else "<a:noFill/>"
         ln = (f'<a:ln w="9525"><a:solidFill><a:srgbClr val="{line}"/></a:solidFill></a:ln>' if line else
               "<a:ln><a:noFill/></a:ln>")
@@ -174,7 +185,7 @@ class Slide:
             f'<a:tblPr firstRow="1" bandRow="1"/><a:tblGrid>{grid}</a:tblGrid>{"".join(trs)}</a:tbl></a:graphicData>'
             f'</a:graphic></p:graphicFrame>')
 
-    def line(self, x1, y1, x2, y2, color="E5E7EB", width=1.0):
+    def line(self, x1, y1, x2, y2, color="E5E7EB", width=1.0, dash=False):
         i = self._nid()
         x, y = min(x1, x2), min(y1, y2)
         w, h = abs(x2 - x1), abs(y2 - y1)
@@ -182,7 +193,8 @@ class Slide:
             f'<p:cxnSp><p:nvCxnSpPr><p:cNvPr id="{i}" name="Line {i}"/><p:cNvCxnSpPr/><p:nvPr/></p:nvCxnSpPr>'
             f'<p:spPr><a:xfrm><a:off x="{emu(x)}" y="{emu(y)}"/><a:ext cx="{emu(w)}" cy="{emu(h)}"/></a:xfrm>'
             f'<a:prstGeom prst="line"><a:avLst/></a:prstGeom><a:ln w="{int(width * 12700)}"><a:solidFill>'
-            f'<a:srgbClr val="{color}"/></a:solidFill></a:ln></p:spPr></p:cxnSp>')
+            f'<a:srgbClr val="{color}"/></a:solidFill>{"<a:prstDash val=" + chr(34) + "dash" + chr(34) + "/>" if dash else ""}'
+            f'</a:ln></p:spPr></p:cxnSp>')
 
     def xml(self):
         bg = (f'<p:bg><p:bgPr><a:solidFill><a:srgbClr val="{self.bg}"/></a:solidFill><a:effectLst/></p:bgPr></p:bg>'

@@ -57,3 +57,52 @@ def test_outlines_and_png(tmp_path):
         out = V.render_png(str(tmp_path / f"{what}.png"), rec, outs, 3, what=what, size=(5, 3), dpi=80)
         assert os.path.getsize(out) > 3000
     V.render_png(str(tmp_path / "empty.png"), {"label": "e", "steps": []}, [], size=(4, 3), dpi=60)
+
+
+def _sq(x0, y0, x1, y1):
+    return [(x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y0)]
+
+
+OUTS = [{"name": "hBN", "pts": _sq(0, 0, 100, 40), "electrode": False},
+        {"name": "TaS2", "pts": _sq(20, 10, 80, 30), "electrode": False},
+        {"name": "top hBN", "pts": _sq(10, 5, 90, 35), "electrode": False},
+        {"name": "contact", "pts": _sq(25, 15, 35, 25), "electrode": True},
+        {"name": "contact2", "pts": _sq(60, 15, 70, 25), "electrode": True}]
+
+
+def test_cut_helpers():
+    import numpy as np
+    assert V.electrode_target("contact") == ("contact", 1) and V.electrode_target("Contact_2") == ("contact", 2)
+    assert V.electrode_target("marker") == ("marker", 1) and V.electrode_target("top gate") == ("top_gate", 1)
+    m = V.inside(_sq(0, 0, 10, 10), np.array([5, 15, 0.1]), np.array([5, 5, 9.9]))
+    assert list(m) == [True, False, True]
+    (x1, y1), (x2, y2) = V.auto_cut(OUTS)                       # 穿過兩個電極的中心（y = 20）
+    assert abs(y1 - 20) < 1e-6 and abs(y2 - 20) < 1e-6 and x1 < 0 < 100 < x2
+
+
+def test_cut_section_follows_outlines():
+    rec = {"label": "c", "type": "Tri-TaS2", "steps": [
+        {"id": "s1", "kind": "transfer", "n": 1, "params": {"layers": [["hBN", 20], ["TaS2", 4], ["hBN", 30]]}},
+        {"id": "s2", "kind": "contact", "n": 1, "substeps": [
+            {"kind": "rie", "params": {"oe_nm": 1}}, {"kind": "deposit", "params": {"layers": [["Cr", 5], ["Au", 60]]}}]},
+        {"id": "s3", "kind": "contact", "n": 2, "substeps": [
+            {"kind": "deposit", "params": {"layers": [["NbTi", 70]]}}]}]}
+    sec = V.build_section(rec, None, outlines=OUTS)
+    assert sec.cut is not None and not sec.missing
+    (ax, _), (bx, _) = sec.cut
+
+    def col(x):
+        i = int((x - ax) / (bx - ax) * V.N)
+        return [(m, round(t, 2)) for m, t, _ in sec.cols[i]]
+    assert col(5) == [("hBN", 20)]                                # 只有下層 hBN
+    assert col(50) == [("hBN", 20), ("TaS2", 4), ("hBN", 30)]     # 中間：完整堆疊
+    assert col(30) == [("hBN", 20), ("TaS2", 3), ("Cr", 5), ("Au", 60)]   # contact #1：RIE 吃掉上層 hBN + OE
+    assert col(65) == [("hBN", 20), ("TaS2", 4), ("hBN", 30), ("NbTi", 70)]  # contact #2 沒有 RIE
+    s1 = V.build_section(rec, 1, outlines=OUTS[:4])               # 沒有 contact2.csv → 記下來
+    s2 = V.build_section(rec, 2, outlines=OUTS[:4])
+    assert not s1.missing and s2.missing == ["Contact #2"]
+    rec["visual"] = {"cut": [[50, -10], [50, 50]]}                 # 自己設的切線（直的）
+    sec = V.build_section(rec, 0, outlines=OUTS)
+    assert sec.cut == ((50, -10), (50, 50))
+    mid = sec.cols[V.N // 2]
+    assert [m for m, _, _ in mid] == ["hBN", "TaS2", "hBN"]
