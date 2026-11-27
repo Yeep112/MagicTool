@@ -60,12 +60,15 @@ def open_external(path):
 
 
 def _date_text(a, b=""):
+    """2025-04-12, 2025-04-15 → 2025/04/12–15；跨月 → 2025/04/28–05/03；跨年 → 2025/12/30–2026/01/02"""
     if not a:
         return ""
     a2 = a.replace("-", "/")
     if b and b != a:
         b2 = b.replace("-", "/")
-        return f"{a2} – {b2[5:] if b2[:4] == a2[:4] else b2}"
+        if b2[:7] == a2[:7]:
+            return f"{a2}–{b2[8:]}"
+        return f"{a2}–{b2[5:] if b2[:4] == a2[:4] else b2}"
     return a2
 
 
@@ -154,6 +157,8 @@ class SamplePage:
         self.tree.pack(side="left", fill="both", expand=True)
         sb.pack(side="right", fill="y")
         self.tree.bind("<<TreeviewSelect>>", lambda e: self._on_pick_sample())
+        tk.Label(self.left, text="灰色 = 放棄　「·」= 沒有資料夾（紀錄存在這台電腦）", bg=T.CARD, fg=T.FAINT,
+                 font=T.font(8), anchor="w").pack(fill="x", pady=(2, 0))
         bf = tk.Frame(self.left, bg=T.CARD)
         bf.pack(fill="x", pady=(8, 0))
         ttk.Button(bf, text="📥 從試算表匯入", style=f"{KEY}.Accent.TButton", command=self.open_import).pack(fill="x")
@@ -198,9 +203,9 @@ class SamplePage:
         row.pack(fill="x", pady=(0, 4))
         tf = tk.Frame(tlf, bg=T.CARD)
         tf.pack(fill="both", expand=True)
-        self.tl = ttk.Treeview(tf, columns=("step", "date", "info"), show="headings", selectmode="browse",
+        self.tl = ttk.Treeview(tf, columns=("step", "date", "dirs", "info"), show="headings", selectmode="browse",
                                style=f"{KEY}.Treeview")
-        for c, t, w in (("step", "步驟", 150), ("date", "日期", 100), ("info", "內容", 220)):
+        for c, t, w in (("step", "步驟", 130), ("date", "日期", 118), ("dirs", "資料夾", 62), ("info", "內容", 200)):
             self.tl.heading(c, text=t)
             self.tl.column(c, width=T.px(w), anchor="w", stretch=c == "info")
         for cat, (zh, en, col) in K.CATEGORIES.items():
@@ -221,6 +226,10 @@ class SamplePage:
                                   selectforeground=T.TEXT)
         self.rv_list.pack(fill="both", expand=True)
         self.rv_list.bind("<Double-Button-1>", lambda e: self._jump_review())
+        self.rv_list.bind("<<ListboxSelect>>", lambda e: self._show_review_text())
+        self.rv_full = tk.Label(rvf, text="", bg=T.CARD, fg=T.TEXT, font=T.font(9), anchor="w", justify="left",
+                                wraplength=T.px(440))
+        self.rv_full.pack(fill="x", pady=(4, 0))
 
         # ---------------- 右：步驟細節
         self.detail = tk.Frame(app.right_host, bg=T.CARD)
@@ -385,15 +394,15 @@ class SamplePage:
             if step["id"] == stop:
                 name += "　⛔ 停在這裡"
             info = K.summary(step)
-            if step.get("folders"):
-                info = (" + ".join(f.split(" ", 1)[0] for f in step["folders"]) + "　" + info).strip()
+            dirs = " + ".join(f.split(" ", 1)[0] for f in step.get("folders", []))
             tags = [K.category(step["kind"])]
             if "folder" not in step.get("source", []) and s["has_folder"]:
                 tags.append("sheetonly")
+                dirs = "—"
                 info = "（只有試算表）" + info
             self.tl.insert("", "end", iid=step["id"], values=(f"{K.icon(step['kind'])} {name}",
                                                               _date_text(step.get("date", ""), step.get("date_end", "")),
-                                                              info), tags=tags)
+                                                              dirs, info), tags=tags)
         self._fill_reviews(rec)
         if keep_step and self.step_id and self.tl.exists(self.step_id):
             self.tl.selection_set(self.step_id)
@@ -401,11 +410,19 @@ class SamplePage:
             self.step_id = None
             self._show_overview(s, rec)
 
+    def _show_review_text(self):
+        sel = self.rv_list.curselection()
+        i = sel[0] if sel else 0
+        items = getattr(self, "_rv_items", [])
+        self.rv_full.configure(text=items[i]["msg"] + ("　（雙擊跳到那一步）" if items[i].get("step") else "")
+                               if i < len(items) else "")
+
     def _fill_reviews(self, rec):
         self.rv_list.delete(0, "end")
         self._rv_items = R.open_reviews(rec)
         for r in self._rv_items:
             self.rv_list.insert("end", r["msg"])
+        self._show_review_text()
         n = len(self._rv_items)
         self.rv_title.configure(text=f"⚠ 待確認（{n}）" if n else "✓ 沒有待確認的地方",
                                 fg=T.WARNING if n else T.SUCCESS)
@@ -872,8 +889,9 @@ class ImportDialog(tk.Toplevel):
         ttk.Button(r, text="選檔案", style=f"{KEY}.Small.TButton", command=self._pick).pack(side="left", padx=(4, 0))
         ttk.Button(r, text="讀取", style=f"{KEY}.Accent.TButton", command=self.read).pack(side="left", padx=(4, 0))
         tk.Label(self, bg=T.CARD, fg=T.FAINT, font=T.font(8), anchor="w", justify="left", wraplength=T.px(560),
-                 text="Google Sheet：貼網址。試算表要共用給服務帳號（和蝕刻紀錄同一個金鑰），或「知道連結的人可以檢視」。"
-                      "也可以在 Google Sheet 選「檔案 → 下載 → .xlsx」，再按「選檔案」。").pack(fill="x", pady=(4, 0))
+                 text=("Google Sheet：貼網址。試算表要共用給服務帳號（和蝕刻紀錄同一個金鑰），或「知道連結的人可以檢視」。"
+                       "也可以在 Google Sheet 選「檔案 → 下載 → .xlsx」，再按「選檔案」。").replace(" ", "\u00a0")).pack(
+            fill="x", pady=(4, 0))
         self.info = tk.Label(self, text="", bg=T.SUBTLE, fg=T.TEXT, font=T.font(10), anchor="w", justify="left",
                              wraplength=T.px(560), padx=10, pady=8)
         self.info.pack(fill="x", pady=(10, 0))

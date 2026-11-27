@@ -36,12 +36,11 @@ jobs:
         if: runner.os != 'Linux'
         run: python tools/perf_probe.py
       - name: 截圖
-        if: runner.os != 'Mac'
         shell: bash
         run: |
           if [ "$RUNNER_OS" = "Linux" ]; then xvfb-run -a -s "-screen 0 1600x1000x24" python tools/screenshot.py shots; else python tools/screenshot.py shots; fi
       - uses: actions/upload-artifact@v4
-        if: always() && runner.os != 'Mac'
+        if: always()
         with:
           name: screenshots-${{ matrix.label }}
           path: shots/
