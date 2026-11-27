@@ -50,6 +50,19 @@ def main():
         fp = os.path.join(OUT, name)
         img.save(fp)
         print("saved", fp, img.size)
+        if os.environ.get("SHOT_BASE64"):              # 印進 log（artifact 下載不了的環境用）
+            import base64
+            import io
+            buf = io.BytesIO()
+            small = img.convert("RGB")
+            if small.width > 1400:
+                small = small.resize((1400, int(small.height * 1400 / small.width)))
+            small.save(buf, "JPEG", quality=82)
+            b = base64.b64encode(buf.getvalue()).decode()
+            print(f"==SHOT {name}==")
+            for k in range(0, len(b), 2000):
+                print(b[k:k + 2000])
+            print("==END==", flush=True)
 
     pump(lambda: "Samples" in app.pages, 10)
     pg = app.page("Samples")
