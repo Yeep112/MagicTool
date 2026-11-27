@@ -41,30 +41,46 @@ def _text(xml):
 def test_single_zh(items, tmp_path):
     it = items[0]
     E.set_results(it["rec"], r_ohm=1500, sc_contact=True, sc_on="TaS2", tc_k=4.2)
-    sid = it["rec"]["steps"][6]["id"]
-    it["rec"]["ppt"] = {"title": "TaS2 contact 測試", "skip_steps": [it["rec"]["steps"][0]["id"]],
-                        "step_notes": {sid: "多蝕刻 3 nm 確保接觸乾淨"}}
+    c2 = [x for x in it["rec"]["steps"] if x["kind"] == "contact"][1]["id"]
+    it["rec"]["ppt"] = {"title": "TaS2 contact 測試", "reporter": "Yeep", "skip_steps": [it["rec"]["steps"][0]["id"]],
+                        "step_notes": {c2: "多蝕刻 3 nm 確保接觸乾淨"}, "problems": ["08 Lift-off 有殘膠"],
+                        "next": ["改 RIE 時間 18 s"]}
     path, n = RP.export([it], str(tmp_path / "a.pptx"), "zh")
     xml, names = _slides(path)
-    assert n == len(xml) and n >= 15
+    assert n == len(xml) and n >= 10
     allt = " ".join(_text(x) for x in xml)
-    for want in ("TaS2 contact 測試", "樣品概況", "製程總覽", "剖面演進", "Contact #1", "多蝕刻 3 nm", "1500 Ω", "4.2 K"):
+    for want in ("TaS2 contact 測試", "報告人　Yeep", "樣品總覽", "製程流程", "第一輪", "第二輪", "旋塗光阻", "曝光、顯影",
+                 "Lift-off", "開窗（微影）", "離子研磨", "重點", "多蝕刻 3 nm", "AFM 厚度：hBN 48.5 nm、TaS2 14.8 nm",
+                 "電性量測：R_1500 (SC)", "結果、問題與下一步", "08 Lift-off 有殘膠", "改 RIE 時間 18 s",
+                 "附錄：試算表製程紀錄", "RIE_20s OE_3nm", "1500 Ω", "4.2 K"):
         assert want in allt, want
-    assert "1. 設計" not in allt                                  # 模板裡關掉的步驟不放
+    assert "步驟 00" not in allt                                  # 模板裡關掉的步驟不放
     assert any(nm.startswith("ppt/media/") and nm.endswith(".jpeg") for nm in names), "照片要縮成 JPEG 放進去"
-    assert any(nm.endswith(".png") for nm in names)
+
+
+def test_stage_sections_template_style(items):
+    from magic.fab import visual as V
+    rec = items[0]["rec"]
+    i = next(k for k, x in enumerate(rec["steps"]) if x["kind"] == "contact")
+    labels = [x["label"] for x in V.stage_sections(rec, i)]
+    assert labels[:2] == ["旋塗光阻", "曝光、顯影"] and labels[-1] == "Lift-off" and "RIE" in " ".join(labels)
+    t = next(k for k, x in enumerate(rec["steps"]) if x["kind"] == "transfer")
+    assert [x["label"] for x in V.stage_sections(rec, t)] == ["疊上 hBN", "疊上 TaS2", "疊上 hBN"]
+    a = next(k for k, x in enumerate(rec["steps"]) if x["kind"] == "afm")
+    assert V.stage_sections(rec, a) == []
+    lift = V.stage_sections(rec, i)[-1]["sec"]
+    assert not any(m == V.RESIST for col in lift.cols for m, _, _ in col), "lift-off 後不能留下光阻"
 
 
 def test_multi_both_and_en(items, tmp_path):
     path, n = RP.export(copy.deepcopy(items), str(tmp_path / "m.pptx"), "both")
     xml, _ = _slides(path)
     allt = " ".join(_text(x) for x in xml)
-    assert "樣品比較 Sample comparison" in allt and "製程總覽 Process overview" not in allt
-    assert "Process overview" in allt and "樣品 Sample al 906" in allt
-    path, n = RP.export([copy.deepcopy(items[2])], str(tmp_path / "e.pptx"), "en", sections={"cover", "timeline"})
+    assert "樣品比較 Sample comparison" in allt and "樣品 Sample al 906" in allt
+    path, n = RP.export([copy.deepcopy(items[2])], str(tmp_path / "e.pptx"), "en", sections={"cover", "flow", "timeline"})
     xml, _ = _slides(path)
     allt = " ".join(_text(x) for x in xml)
-    assert n == 2 and "Process overview" in allt and "製程" not in allt
+    assert n == 3 and "Process flow" in allt and "Process overview" in allt and "製程" not in allt
 
 
 def test_opens_in_python_pptx(items, tmp_path):

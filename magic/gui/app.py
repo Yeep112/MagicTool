@@ -263,6 +263,15 @@ class App:
                 self.page(key)
                 self.root.after(120, self._prebuild)
                 return
+        self.root.after(300, self._settle_gc)
+
+    def _settle_gc(self):
+        """頁面都建好了：回收一次，再把常駐的物件（模組、介面元件）凍結起來。
+        之後 Python 的記憶體回收不用每次都掃它們，切換頁面時不會突然卡 0.1–0.2 秒。"""
+        import gc
+        gc.collect()
+        if hasattr(gc, "freeze"):
+            gc.freeze()
 
     # ================================================================== 背景工作
     def submit(self, fn):

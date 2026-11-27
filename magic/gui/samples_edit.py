@@ -204,6 +204,13 @@ class StepEditor(_Dialog):
         kind = self.kind
         same = self.step is not None and self.step["kind"] == kind
         base = self.step if same else E.new_step(kind, self.rec)
+        if self.step is not None and not same:               # 換種類（例如推測的 marker 改成 contact）：照片、子步驟、備註留著
+            groups = set(K.GROUP_KINDS) | {"litho_group"}
+            base = dict(base, folders=list(self.step.get("folders") or []), notes=self.step.get("notes", ""))
+            if kind in groups and self.step["kind"] in groups:
+                base["substeps"] = [dict(x) for x in self.step.get("substeps") or []]
+                base["params"] = {k: v for k, v in (self.step.get("params") or {}).items()
+                                  if k in {p[0] for p in K.PARAMS.get(kind, [])} or k.startswith("x_")}
         self.main = None
         self.subrows = []
         if K.PARAMS.get(kind):
@@ -663,7 +670,7 @@ class ExportDialog(_Dialog):
         self.title("匯出 PPT")
         self.configure(bg=T.CARD, padx=14, pady=12)
         self.transient(page.app.root)
-        self.geometry(f"{T.px(980)}x{T.px(660)}")
+        self.geometry(f"{T.px(1000)}x{T.px(700)}")
         self.minsize(T.px(760), T.px(520))
         tk.Label(self, text="📤 一鍵匯出 PPT", bg=T.CARD, fg=T.TEXT, font=T.font(13, "bold"), anchor="w").pack(fill="x")
         tk.Label(self, text="選一顆 = 單一樣品報告；選好幾顆 = 同一份裡比較（Ctrl / Shift 多選）。模板會存在每顆樣品的紀錄檔，下次匯出沿用。",
@@ -685,7 +692,7 @@ class ExportDialog(_Dialog):
         left.pack(side="left", fill="y")
         tk.Label(left, text="樣品", bg=T.CARD, fg=T.TEXT, font=T.font(10, "bold"), anchor="w").pack(fill="x")
         self.samples = list(page.lib.samples if page.lib else [])
-        self.slist = tk.Listbox(left, selectmode="extended", height=10, width=22, exportselection=False, bd=0,
+        self.slist = tk.Listbox(left, selectmode="extended", height=8, width=26, exportselection=False, bd=0,
                                 highlightthickness=1, highlightbackground=T.BORDER, font=T.font(10), activestyle="none",
                                 selectbackground=T.mix_color(T.accent(KEY)["main"], "#ffffff", 0.7), selectforeground=T.TEXT)
         for x in self.samples:
@@ -704,10 +711,13 @@ class ExportDialog(_Dialog):
                                                                                                     pady=(10, 0))
         saved = set(page.st.get("ppt_sections") or RP.DEFAULT_ON)
         self.sec = {}
-        for k, zh, en in RP.SECTIONS:
+        sg = tk.Frame(left, bg=T.CARD)                              # 兩欄（矮螢幕也放得下）
+        sg.pack(fill="x")
+        for i, (k, zh, en) in enumerate(RP.SECTIONS):
             v = tk.BooleanVar(value=k in saved)
             self.sec[k] = v
-            ttk.Checkbutton(left, text=zh, variable=v, style=f"{KEY}.TCheckbutton").pack(anchor="w")
+            ttk.Checkbutton(sg, text=zh.split("（")[0], variable=v, style=f"{KEY}.TCheckbutton").grid(
+                row=i // 2, column=i % 2, sticky="w", padx=(0, 8))
         # ---- 右：模板
         right = tk.Frame(body, bg=T.CARD)
         right.pack(side="left", fill="both", expand=True, padx=(16, 0))
@@ -717,18 +727,27 @@ class ExportDialog(_Dialog):
         g.pack(fill="x", pady=(4, 6))
         self.t_title = tk.StringVar()
         self.t_sub = tk.StringVar()
-        for r, (lab, var, hint) in enumerate((("標題", self.t_title, "空白 = 「樣品 102 製程報告」"),
-                                              ("副標題", self.t_sub, "空白 = 類型 · 使用者"))):
+        self.t_rep = tk.StringVar()
+        self.t_head = tk.StringVar()
+        for r, (lab, var, hint) in enumerate((("標題", self.t_title, "空白 = 「TaS2 102 樣品製程報告」"),
+                                              ("副標題", self.t_sub, "空白 = 類型 · 日期 · 狀態"),
+                                              ("報告人", self.t_rep, "空白 = 使用者名稱"))):
             tk.Label(g, text=lab, bg=T.CARD, fg=T.TEXT, font=T.font(10)).grid(row=r, column=0, sticky="w")
-            ttk.Entry(g, textvariable=var, width=48).grid(row=r, column=1, sticky="we", pady=1)
+            ttk.Entry(g, textvariable=var, width=44).grid(row=r, column=1, sticky="we", pady=1)
             tk.Label(g, text=hint, bg=T.CARD, fg=T.FAINT, font=T.font(8)).grid(row=r, column=2, sticky="w", padx=(6, 0))
         g.columnconfigure(1, weight=1)
-        tk.Label(right, text="每一步：點「放」那一欄切換要不要放進 PPT；選一步可以寫給教授看的說明", bg=T.CARD, fg=T.MUTED,
-                 font=T.font(9), anchor="w").pack(fill="x")
-        tf = tk.Frame(right, bg=T.CARD)
+        nb = ttk.Notebook(right)
+        nb.pack(fill="both", expand=True, pady=(4, 0))
+        self.nb = nb
+        # 分頁 1：每一步
+        t1 = tk.Frame(nb, bg=T.CARD, padx=6, pady=6)
+        nb.add(t1, text="每一步")
+        tk.Label(t1, text="點「放」那一欄切換要不要放進 PPT；選一步可以寫給教授看的說明（步驟頁的「備註 / 重點」）", bg=T.CARD,
+                 fg=T.MUTED, font=T.font(9), anchor="w").pack(fill="x")
+        tf = tk.Frame(t1, bg=T.CARD)
         tf.pack(fill="both", expand=True, pady=(4, 0))
         self.steps = ttk.Treeview(tf, columns=("on", "step", "date", "note"), show="headings", selectmode="browse",
-                                  style=f"{KEY}.Treeview", height=9)
+                                  style=f"{KEY}.Treeview", height=8)
         for c, t, w in (("on", "放", 36), ("step", "步驟", 150), ("date", "日期", 96), ("note", "說明", 260)):
             self.steps.heading(c, text=t)
             self.steps.column(c, width=T.px(w), anchor="center" if c == "on" else "w", stretch=c == "note")
@@ -738,10 +757,39 @@ class ExportDialog(_Dialog):
         sb.pack(side="right", fill="y")
         self.steps.bind("<ButtonRelease-1>", self._click)
         self.steps.bind("<<TreeviewSelect>>", lambda e: self._show_note())
-        self.note = tk.Text(right, height=3, font=T.font(10), bd=0, highlightthickness=1, highlightbackground=T.BORDER,
+        self.note = tk.Text(t1, height=3, font=T.font(10), bd=0, highlightthickness=1, highlightbackground=T.BORDER,
                             wrap="word")
         self.note.pack(fill="x", pady=(6, 0))
         self.note.bind("<KeyRelease>", lambda e: self._note_changed())
+        # 分頁 2：總覽與討論
+        t2 = tk.Frame(nb, bg=T.CARD, padx=6, pady=6)
+        nb.add(t2, text="總覽、結果、問題、下一步")
+        h = tk.Frame(t2, bg=T.CARD)
+        h.pack(fill="x")
+        tk.Label(h, text="總覽標題", bg=T.CARD, fg=T.TEXT, font=T.font(10)).pack(side="left")
+        ttk.Entry(h, textvariable=self.t_head, width=44).pack(side="left", fill="x", expand=True, padx=(6, 0))
+        tk.Label(t2, text="「樣品總覽：」後面那一句（空白 = 「15 個步驟，197 天完成量測」）", bg=T.CARD, fg=T.FAINT,
+                 font=T.font(8), anchor="w").pack(fill="x")
+        tk.Label(t2, text="摘要（總覽頁最下面一句話，這顆樣品的故事）", bg=T.CARD, fg=T.TEXT, font=T.font(10),
+                 anchor="w").pack(fill="x", pady=(6, 0))
+        self.story = tk.Text(t2, height=2, font=T.font(10), bd=0, highlightthickness=1, highlightbackground=T.BORDER,
+                             wrap="word")
+        self.story.pack(fill="x")
+        cols = tk.Frame(t2, bg=T.CARD)
+        cols.pack(fill="both", expand=True, pady=(8, 0))
+        self.lists = {}
+        for i, (key, lab) in enumerate((("results", "目前結果"), ("problems", "遇到的問題"), ("next", "下一步"))):
+            f = tk.Frame(cols, bg=T.CARD)
+            f.grid(row=0, column=i, sticky="nsew", padx=(0 if i == 0 else 6, 0))
+            cols.columnconfigure(i, weight=1)
+            tk.Label(f, text=lab + "（一行一項）", bg=T.CARD, fg=T.TEXT, font=T.font(10), anchor="w").pack(fill="x")
+            w = tk.Text(f, height=5, width=20, font=T.font(10), bd=0, highlightthickness=1, highlightbackground=T.BORDER,
+                        wrap="word")
+            w.pack(fill="both", expand=True)
+            self.lists[key] = w
+        cols.rowconfigure(0, weight=1)
+        tk.Label(t2, text="「目前結果」空白 = 用結果欄位（電阻、超導、Tc）；「下一步」空白 = 用樣品狀態裡的下一步", bg=T.CARD,
+                 fg=T.FAINT, font=T.font(8), anchor="w").pack(fill="x", pady=(4, 0))
         self.cur = None
         self.tpl = None
         self._load_tpl()
@@ -766,6 +814,13 @@ class ExportDialog(_Dialog):
                                                                     if len(sel) > 1 else ""))
         self.t_title.set(self.tpl["title"])
         self.t_sub.set(self.tpl["subtitle"])
+        self.t_rep.set(self.tpl["reporter"])
+        self.t_head.set(self.tpl["headline"])
+        self.story.delete("1.0", "end")
+        self.story.insert("1.0", self.tpl["story"])
+        for key, w in self.lists.items():
+            w.delete("1.0", "end")
+            w.insert("1.0", "\n".join(self.tpl[key]))
         for st in rec.get("steps", []):
             self.steps.insert("", "end", iid=st["id"], values=(
                 "—" if st["id"] in self.tpl["skip_steps"] else "✓", K.step_name(st),
@@ -776,6 +831,11 @@ class ExportDialog(_Dialog):
         if self.cur is not None and self.tpl is not None:
             self.tpl["title"] = self.t_title.get().strip()
             self.tpl["subtitle"] = self.t_sub.get().strip()
+            self.tpl["reporter"] = self.t_rep.get().strip()
+            self.tpl["headline"] = self.t_head.get().strip()
+            self.tpl["story"] = self.story.get("1.0", "end").strip()
+            for key, w in self.lists.items():
+                self.tpl[key] = [x.strip(" •\t") for x in w.get("1.0", "end").splitlines() if x.strip(" •\t")]
             self.page.ppt_drafts[self.cur["key"]] = dict(self.tpl)
 
     def _click(self, e):

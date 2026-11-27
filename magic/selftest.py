@@ -844,6 +844,7 @@ def run_gui(rep, timeout=90):
         # 樣品頁上面沒有畫圖，還沒顯示過：先顯示一次（和機台頁一樣，量的是第二次以後的切換）
         app.segment.select("Samples")
         root.update()
+        app._settle_gc()                    # 和實際使用一樣：頁面建好後回收一次、凍結常駐物件
         # 再切換一輪（頁面都建好了），量切換時間。先等最後一張圖畫完（剛畫完馬上切走的頁面，回來時才補畫一次）
         pump(lambda: False, 0.8)
         gaps.clear()
@@ -1185,7 +1186,76 @@ def _gui_samples(app, root, pump):
     _gui_samples_edit(app, root, pump, pg, p)
     _gui_samples_visual(app, root, pump, pg, p)
     _gui_samples_ppt(app, root, pump, pg, p)
+    _gui_samples_091(app, root, pump, pg, p)
     pg.save_cfg(root="", sheet="", user="", sheet_sync=False)
+
+
+def _gui_samples_091(app, root, pump, pg, p):
+    """v0.9.1：待確認「種類是推測的」→ 直接修改那一步（改完自動算已確認）；DXF 用 KLayout / AutoCAD 開。"""
+    from .fab import cad as FC
+    from .fab import edit as FE
+    from .fab import records as FR
+    from .fab import steps as K
+    from .gui import samples_page as SPM
+    s = pg.find("909")                                   # 只有資料夾：微影組的種類是推測的
+    pg.refresh_list(select=s["key"])
+    root.update()
+    guess = [r for r in pg._rv_items if r.get("step") and "推測" in r["msg"]]
+    assert guess, [r["msg"] for r in pg._rv_items]
+    pg.rv_list.selection_clear(0, "end")
+    pg.rv_list.selection_set(pg._rv_items.index(guess[0]))
+    pg._show_review_text()
+    assert pg.rv_edit.instate(["!disabled"])
+    ed = pg.edit_review_step()
+    root.update()
+    assert ed is not None and pg.step_id == guess[0]["step"], "待確認要能直接打開那一步"
+    old_kind = ed.step["kind"]
+    new_kind = "contact" if old_kind == "marker" else "marker"
+    names = [f"{K.icon(k)} {K.label(k)}" for k in ed.kinds]
+    ed.kind_var.set(names[ed.kinds.index(new_kind)])
+    ed._build_body()
+    assert ed.folder_names and ed.folder_list.curselection(), "換種類時資料夾（照片）要留著"
+    assert any(r["orig"] for r in ed.subrows), "換種類時子步驟（顯影後 / 鍍完的照片）要留著"
+    ed.save()
+    root.update()
+    st = FE.find(FR.load(s["path"]), guess[0]["step"])
+    assert st["kind"] == new_kind and st["folders"], st
+    saved = FR.load(s["path"])
+    assert all(r["resolved"] for r in saved["review"] if r.get("step") == guess[0]["step"]), "改過的步驟要自動算已確認"
+    # 待確認視窗也有「✎ 修改這一步」
+    rd = SPM.ReviewDialog(pg)
+    root.update()
+    rd.destroy()
+    # DXF：預設 KLayout，另一顆是 AutoCAD；找不到程式 → 問要不要指定
+    from tkinter import messagebox
+    d = os.path.join(s["dir"], "00 Design")
+    os.makedirs(d, exist_ok=True)
+    dxf = os.path.join(d, "mask.dxf")
+    with open(dxf, "w") as f:
+        f.write("0\nEOF\n")
+    calls = []
+    real = (FC.find_app, FC.open_with, messagebox.askyesno)
+    FC.find_app = lambda app, custom="": f"/fake/{app}"
+    FC.open_with = lambda exe, path: calls.append((exe, path)) or True
+    try:
+        pg._clear()
+        pg._file_rows([dxf])
+        texts = _texts(pg.body)
+        assert "KLayout 開啟" in texts and "AutoCAD" in texts, texts
+        assert pg.open_cad(dxf, "klayout") == "/fake/klayout" and calls[-1] == ("/fake/klayout", dxf)
+        assert pg.open_cad(dxf, "autocad") == "/fake/autocad"
+        FC.find_app = lambda app, custom="": ""
+        messagebox.askyesno = lambda *a, **k: False
+        assert pg.open_cad(dxf, "autocad") is None and len(calls) == 2
+        pg.save_cfg(rescan=False, cad_default="autocad")
+        pg._clear()
+        pg._file_rows([dxf])
+        assert "AutoCAD 開啟" in _texts(pg.body)
+    finally:
+        FC.find_app, FC.open_with, messagebox.askyesno = real
+        pg.save_cfg(rescan=False, cad_default="klayout")
+        os.remove(dxf)
+    assert SPM.CAD is FC
 
 
 def _gui_samples_ppt(app, root, pump, pg, p):
@@ -1210,6 +1280,11 @@ def _gui_samples_ppt(app, root, pump, pg, p):
     dlg.note.insert("1.0", "給教授：這一步重做過一次")
     dlg._note_changed()
     dlg.t_title.set("901 製程報告（selftest）")
+    dlg.t_rep.set("Yeep")
+    dlg.nb.select(1)
+    root.update()
+    dlg.lists["problems"].insert("1.0", "08 Lift-off 有殘膠\n")
+    dlg.lists["next"].insert("1.0", "改 RIE 時間 18 s")
     out = os.path.join(tempfile.mkdtemp(), "901.pptx")
     dlg.export(out)
     assert pump(lambda: "已匯出" in dlg.info.cget("text") or "失敗" in dlg.info.cget("text"), 60), dlg.info.cget("text")
@@ -1217,7 +1292,10 @@ def _gui_samples_ppt(app, root, pump, pg, p):
     with zipfile.ZipFile(out) as z:
         xml = " ".join(z.read(n).decode("utf-8") for n in z.namelist() if re.fullmatch(r"ppt/slides/slide\d+\.xml", n))
     assert "901 製程報告（selftest）" in xml and "給教授：這一步重做過一次" in xml
+    for want in ("報告人　Yeep", "08 Lift-off 有殘膠", "改 RIE 時間 18 s", "旋塗光阻", "開窗（微影）", "製程流程"):
+        assert want in xml, want
     tpl = FR.load(s["path"])["ppt"]
+    assert tpl["reporter"] == "Yeep" and tpl["problems"] == ["08 Lift-off 有殘膠"] and tpl["next"] == ["改 RIE 時間 18 s"]
     assert first in tpl["skip_steps"] and tpl["step_notes"][sid].startswith("給教授") and tpl["title"].endswith("（selftest）")
     # 多樣品比較、中英並列
     dlg.slist.selection_clear(0, "end")
@@ -1266,6 +1344,53 @@ def _gui_samples_visual(app, root, pump, pg, p):
     pg.stop_play()
     out = pg.save_visual(os.path.join(tempfile.mkdtemp(), "vis.png"))
     assert os.path.getsize(out) > 5000
+    # v0.9.1：剖面照切線畫（digitalize 輪廓）；在俯視圖上點兩下設定切線、↺ 恢復自動
+    from .fab import records as FR
+    from .fab import visual as FV
+    sec = FV.build_section(pg.record(), None, outlines=pg._outlines[s["key"]])
+    assert sec.cut is not None, "有輪廓檔時剖面要照切線畫"
+    pg.vis_goto(None)
+    root.update()
+    assert "A–A'" in fig.axes[0].get_title(loc="left"), fig.axes[0].get_title(loc="left")
+    pg.start_cut()
+    assert "點兩下" in pg.vis["cap"].cget("text")
+    top = pg.vis["top_ax"]
+
+    class _Click:
+        def __init__(self, x, y):
+            self.inaxes, self.xdata, self.ydata = top, x, y
+    pg._on_vis_click(_Click(4040.0, 4944.0))
+    pg._on_vis_click(_Click(4052.0, 4952.0))
+    root.update()
+    assert FR.load(s["path"])["visual"]["cut"] == [[4040.0, 4944.0], [4052.0, 4952.0]], "切線沒有存進紀錄檔"
+    assert FV.cut_line(pg.record(), pg._outlines[s["key"]]) == ((4040.0, 4944.0), (4052.0, 4952.0))
+    pg.set_cut(None)
+    assert "cut" not in FR.load(s["path"]).get("visual", {})
+    # v0.9.1：只在雲端的照片 → 打開資料夾；下載完自動顯示縮圖
+    from .fab import folders as FF
+    from .gui import samples_page as SPM
+    pg.set_view("detail")
+    sid = next(x["id"] for x in pg.record()["steps"] if x["folders"] == ["05 Lithography", "06 Lift Off"])
+    cloud = {}
+    real_cloud, real_reveal = FF.is_cloud_only, SPM.reveal
+    opened = []
+    FF.is_cloud_only = lambda path: path in cloud
+    SPM.reveal = lambda path: opened.append(path) or True
+    try:
+        imgs = FF.scan_folder(os.path.join(s["dir"], "05 Lithography"))["images"]
+        cloud[imgs[0]] = True
+        pg._thumb_cache.clear()
+        pg.select_step(sid)
+        assert pump(lambda: pg._thumb_cache.get(imgs[0]) == "cloud", 10), "雲端照片要顯示「只在雲端」"
+        assert "打開資料夾" in pg._thumb_labels[imgs[0]].cget("text")
+        pg.show_photo(imgs[0])
+        assert opened == [imgs[0]] and imgs[0] in pg._cloud_watch, "點雲端照片要打開資料夾"
+        cloud.clear()                                          # 使用者在檔案總管點兩下 → 下載好了
+        assert pump(lambda: pg._thumb_cache.get(imgs[0]) not in (None, "cloud"), 10), "下載完縮圖要自動更新"
+        assert not pg._cloud_watch
+    finally:
+        FF.is_cloud_only, SPM.reveal = real_cloud, real_reveal
+    pg.set_view("visual")
     pg.set_view("detail")
     root.update()
     assert pg.sf.winfo_ismapped() and not pg.vis["frame"].winfo_ismapped()

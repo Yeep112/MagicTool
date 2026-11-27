@@ -14,6 +14,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 from ..core import settings as S
+from ..fab import cad as CAD
 from ..fab import edit as E
 from ..fab import folders as F
 from ..fab import records as R
@@ -52,6 +53,9 @@ def sample_settings(settings):
     s.setdefault("sheet_sync", False)
     s.setdefault("sheet_script_url", "")
     s.setdefault("sheet_token", "")
+    s.setdefault("cad_default", "klayout")      # DXF / GDS 預設用哪個開：klayout / autocad
+    s.setdefault("klayout_path", "")
+    s.setdefault("autocad_path", "")
     return s
 
 
@@ -62,6 +66,21 @@ def open_external(path):
         else:
             import subprocess
             subprocess.Popen(["open" if sys.platform == "darwin" else "xdg-open", path])
+        return True
+    except Exception:
+        return False
+
+
+def reveal(path):
+    """在檔案總管 / Finder 打開檔案所在的資料夾，並選好那個檔案（雲端照片：在那裡點兩下就會下載）。"""
+    try:
+        import subprocess
+        if os.name == "nt":
+            subprocess.Popen(f'explorer /select,"{os.path.normpath(path)}"')
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", "-R", path])
+        else:
+            subprocess.Popen(["xdg-open", os.path.dirname(path)])
         return True
     except Exception:
         return False
@@ -98,6 +117,9 @@ class SamplePage:
         self.scanning = False
         self._scan_listeners = []
         self.ppt_drafts = {}
+        self._cloud_watch = {}
+        self._cloud_job = None
+        self._cut_pts = None
         import threading
         self._sync_lock = threading.Lock()
         self.cfg = sample_settings(app.settings)
@@ -207,17 +229,19 @@ class SamplePage:
         self.s_res.pack(fill="x", pady=(4, 0))
         cbtn = tk.Frame(card, bg=T.SUBTLE)
         cbtn.pack(fill="x", pady=(8, 0))
+        cbtn2 = tk.Frame(card, bg=T.SUBTLE)                        # 第二排：狀態與結果（一排放不下，窄螢幕會被切掉）
+        cbtn2.pack(fill="x", pady=(4, 0))
         self.open_btn = ttk.Button(cbtn, text="📂 開啟樣品資料夾", style=f"{KEY}.Small.TButton", command=self.open_sample_dir)
         self.open_btn.pack(side="left")
         self.ppt_btn = ttk.Button(cbtn, text="📤 匯出 PPT", style=f"{KEY}.Small.TButton", command=self.open_export)
         self.ppt_btn.pack(side="left", padx=(6, 0))
         self.make_btn = ttk.Button(cbtn, text="建立紀錄檔", style=f"{KEY}.Small.TButton", command=self.create_record)
-        self.res_btn = ttk.Button(cbtn, text="✎ 結果", style=f"{KEY}.Small.TButton", command=self.open_results)
-        self.res_btn.pack(side="right")
-        self.ab_btn = ttk.Button(cbtn, text="✕ 放棄", style=f"{KEY}.Small.TButton", command=lambda: self.toggle_state("abandoned"))
-        self.ab_btn.pack(side="right", padx=(0, 4))
-        self.hold_btn = ttk.Button(cbtn, text="⏸ 擱置", style=f"{KEY}.Small.TButton", command=lambda: self.toggle_state("hold"))
-        self.hold_btn.pack(side="right", padx=(0, 4))
+        self.hold_btn = ttk.Button(cbtn2, text="⏸ 擱置", style=f"{KEY}.Small.TButton", command=lambda: self.toggle_state("hold"))
+        self.hold_btn.pack(side="left")
+        self.ab_btn = ttk.Button(cbtn2, text="✕ 放棄", style=f"{KEY}.Small.TButton", command=lambda: self.toggle_state("abandoned"))
+        self.ab_btn.pack(side="left", padx=(4, 0))
+        self.res_btn = ttk.Button(cbtn2, text="✎ 結果", style=f"{KEY}.Small.TButton", command=self.open_results)
+        self.res_btn.pack(side="left", padx=(4, 0))
         self.prev_lab = tk.Label(self.mid, text="", bg=T.CARD, fg=T.WARNING, font=T.font(9), anchor="w", justify="left",
                                  wraplength=T.px(440))
         self.prev_lab.pack(fill="x", pady=(6, 0))
@@ -260,11 +284,13 @@ class SamplePage:
         self.rv_title = tk.Label(rh, text="⚠ 待確認", bg=T.CARD, fg=T.WARNING, font=T.font(10, "bold"))
         self.rv_title.pack(side="left")
         ttk.Button(rh, text="✓ 已確認", style=f"{KEY}.Small.TButton", command=self.resolve_selected).pack(side="right")
+        self.rv_edit = ttk.Button(rh, text="✎ 修改這一步", style=f"{KEY}.Small.TButton", command=self.edit_review_step)
+        self.rv_edit.pack(side="right", padx=(0, 4))
         self.rv_list = tk.Listbox(rvf, height=4, bd=0, highlightthickness=1, highlightbackground=T.BORDER,
                                   font=T.font(9), activestyle="none", selectbackground=T.mix_color(COLOR, "#ffffff", 0.75),
                                   selectforeground=T.TEXT)
         self.rv_list.pack(fill="both", expand=True)
-        self.rv_list.bind("<Double-Button-1>", lambda e: self._jump_review())
+        self.rv_list.bind("<Double-Button-1>", lambda e: self.edit_review_step())
         self.rv_list.bind("<<ListboxSelect>>", lambda e: self._show_review_text())
         self.rv_full = tk.Label(rvf, text="", bg=T.CARD, fg=T.TEXT, font=T.font(9), anchor="w", justify="left",
                                 wraplength=T.px(440))
@@ -483,8 +509,10 @@ class SamplePage:
         sel = self.rv_list.curselection()
         i = sel[0] if sel else 0
         items = getattr(self, "_rv_items", [])
-        self.rv_full.configure(text=items[i]["msg"] + ("　（雙擊跳到那一步）" if items[i].get("step") else "")
+        has = i < len(items) and bool(items[i].get("step"))
+        self.rv_full.configure(text=items[i]["msg"] + ("　（雙擊或按「✎ 修改這一步」直接改；改完會自動算已確認）" if has else "")
                                if i < len(items) else "")
+        self.rv_edit.state(["!disabled"] if has else ["disabled"])
 
     def _fill_reviews(self, rec):
         self.rv_list.delete(0, "end")
@@ -603,8 +631,12 @@ class SamplePage:
                  font=T.font(9), anchor="w").pack(fill="x", pady=(4, 0))
         msgs = [r["msg"] for r in R.open_reviews(rec) if r.get("step") == step["id"]]
         for m in msgs:
-            tk.Label(self.body, text="⚠ " + m, bg="#fffbeb", fg=T.WARNING, font=T.font(9), anchor="w", justify="left",
-                     wraplength=T.px(520), padx=8, pady=4).pack(fill="x", pady=(6, 0))
+            wr = tk.Frame(self.body, bg="#fffbeb")
+            wr.pack(fill="x", pady=(6, 0))
+            ttk.Button(wr, text="✎ 修改", style=f"{KEY}.Small.TButton",
+                       command=lambda: self.open_step_editor(s, rec, step)).pack(side="right", padx=4, pady=3)
+            tk.Label(wr, text="⚠ " + m, bg="#fffbeb", fg=T.WARNING, font=T.font(9), anchor="w", justify="left",
+                     wraplength=T.px(440), padx=8, pady=4).pack(side="left", fill="x", expand=True)
         if kind in K.GROUP_KINDS or kind == "litho_group":
             self._h("子步驟（可以選填）")
             have = {}
@@ -677,6 +709,16 @@ class SamplePage:
             tk.Label(r, text=os.path.basename(p), bg=T.CARD, fg=T.TEXT, font=T.font(9), anchor="w").pack(
                 side="left", fill="x", expand=True)
             ext = os.path.splitext(p)[1].lower()
+            if ext in CAD.CAD_EXT:                          # DXF / GDS：預設 KLayout，另一個按鈕用 AutoCAD
+                first = CAD.default_app(p, self.cfg.get("cad_default"))
+                order = [first] + [a for a in ("klayout", "autocad") if a != first]
+                if ext == ".dwg":
+                    order = ["autocad"]
+                for app in reversed(order):
+                    ttk.Button(r, text=f"{CAD.APPS[app]} 開啟" if app == first else CAD.APPS[app],
+                               style=f"{KEY}.Small.TButton",
+                               command=lambda p=p, a=app: self.open_cad(p, a)).pack(side="right", padx=(0, 4))
+                continue
             if ext in (".dat", ".txt", ".csv"):
                 ttk.Button(r, text="在 Magic Tool 開啟", style=f"{KEY}.Small.TButton",
                            command=lambda p=p: self.app.open_path(p)).pack(side="right")
@@ -737,7 +779,7 @@ class SamplePage:
         if lab is None or not lab.winfo_exists():
             return
         if img == "cloud":
-            lab.configure(text="☁ 只在雲端\n點一下下載", fg=T.MUTED)
+            lab.configure(text="☁ 只在雲端\n點一下打開資料夾", fg=T.MUTED)
             return
         if not img:
             lab.configure(text="（無法預覽）")
@@ -752,8 +794,64 @@ class SamplePage:
         lab.configure(image=ph, text="", width=0, height=0)
 
     def show_photo(self, path, title=""):
+        if self._thumb_cache.get(path) == "cloud" or F.is_cloud_only(path):
+            return self.open_cloud(path)
         from .om_images import OMViewer
         OMViewer(self.app.root, [(title or os.path.basename(path), path)], KEY, title=os.path.basename(path))
+
+    # ---- DXF / GDS：KLayout 或 AutoCAD
+    def open_cad(self, path, app="klayout", ask=True):
+        key = f"{app}_path"
+        exe = CAD.find_app(app, self.cfg.get(key, ""))
+        if not exe and ask:
+            name = CAD.APPS[app]
+            if not messagebox.askyesno(f"用 {name} 開啟", f"找不到 {name}。要自己指定 {name} 的程式位置嗎？\n"
+                                                      f"（Windows：{'klayout_app.exe' if app == 'klayout' else 'acad.exe'}；"
+                                                      f"Mac：{name}.app）", parent=self.app.root):
+                return None
+            exe = filedialog.askopenfilename(parent=self.app.root, title=f"選 {name} 的程式",
+                                             filetypes=[("程式", "*.exe *.app"), ("全部", "*.*")])
+            if not exe:
+                return None
+            self.save_cfg(rescan=False, **{key: os.path.normpath(exe)})
+        if not exe:
+            return None
+        try:
+            CAD.open_with(exe, path)
+        except OSError as e:
+            messagebox.showerror("開啟", f"{CAD.APPS[app]} 開不了：{e}", parent=self.app.root)
+            return None
+        self.app.status(f"用 {CAD.APPS[app]} 開啟：{os.path.basename(path)}", "ok")
+        return exe
+
+    # ---- 只在雲端的照片：打開資料夾讓使用者下載，下載完自動更新縮圖
+    def open_cloud(self, path):
+        reveal(path)
+        lab = getattr(self, "_thumb_labels", {}).get(path)
+        if lab is not None and lab.winfo_exists():
+            lab.configure(text="☁ 已打開資料夾\n在那裡點兩下下載\n（下載完會自動顯示）", fg=T.TEXT)
+        self.app.status(f"已打開資料夾：{os.path.dirname(path)}（在那裡點兩下照片就會下載，下載完這裡會自動更新）", "ok")
+        self._cloud_watch[path] = time.time() + 300                 # 最多等 5 分鐘
+        if not self._cloud_job:
+            self._cloud_job = self.app.root.after(1500, self._check_cloud)
+        return path
+
+    def _check_cloud(self):
+        self._cloud_job = None
+        now = time.time()
+        done = []
+        for p, until in list(self._cloud_watch.items()):
+            if now > until:
+                self._cloud_watch.pop(p, None)
+            elif os.path.exists(p) and not F.is_cloud_only(p):
+                done.append(p)
+                self._cloud_watch.pop(p, None)
+        if done:
+            for p in done:
+                self._thumb_cache.pop(p, None)
+            self.app.submit(lambda: self._load_thumbs(done))
+        if self._cloud_watch:
+            self._cloud_job = self.app.root.after(1500, self._check_cloud)
 
     # ================================================================== 動作
     def open_sample_dir(self):
@@ -820,6 +918,25 @@ class SamplePage:
         if self.sample and self.sample["key"] == s["key"]:
             self._show_sample(s, keep_step=True)
         self._update_review_btn()
+
+    def edit_review_step(self, rid=None):
+        """待確認的那一步（例如推測的種類）→ 跳過去並打開步驟編輯。"""
+        if not self.sample:
+            return None
+        items = getattr(self, "_rv_items", [])
+        if rid is None:
+            sel = self.rv_list.curselection()
+            if not sel:
+                return None
+            r = items[sel[0]]
+        else:
+            r = next((x for x in items if x["id"] == rid), None)
+        if not r or not r.get("step"):
+            return None
+        self.select_step(r["step"])
+        rec = self.record()
+        step = E.find(rec, r["step"])
+        return self.open_step_editor(self.sample, rec, step) if step else None
 
     def _jump_review(self):
         sel = self.rv_list.curselection()
@@ -911,6 +1028,10 @@ class SamplePage:
             v[w].pack(side="left", padx=(0, 4))
         v["save"] = ttk.Button(ctl, text="存圖", style=f"{KEY}.Small.TButton", command=self.save_visual)
         v["save"].pack(side="right")
+        v["auto_cut"] = ttk.Button(ctl, text="↺ 自動", style=f"{KEY}.Small.TButton", command=lambda: self.set_cut(None))
+        v["auto_cut"].pack(side="right", padx=(0, 4))
+        v["cut"] = ttk.Button(ctl, text="✂ 切線", style=f"{KEY}.Small.TButton", command=self.start_cut)
+        v["cut"].pack(side="right", padx=(0, 4))
         v["scale"] = tk.Scale(fr, from_=0, to=1, orient="horizontal", showvalue=False, bg=T.CARD, highlightthickness=0,
                               troughcolor=T.CHIP, bd=0, sliderrelief="flat", command=self._on_scale)
         v["scale"].pack(side="bottom", fill="x")
@@ -921,6 +1042,7 @@ class SamplePage:
         v["canvas"] = FigureCanvasTkAgg(v["fig"], master=fr)
         v["canvas"].get_tk_widget().pack(fill="both", expand=True)
         v["canvas"].get_tk_widget().configure(bg="white", highlightthickness=0)
+        v["canvas"].mpl_connect("button_press_event", self._on_vis_click)
         self.vis = v
 
     def outlines(self, s):
@@ -974,8 +1096,10 @@ class SamplePage:
         i = self.vis_step if steps else -1
         gs = fig.add_gridspec(2, 1, height_ratios=[1.15, 1])
         try:
-            V.draw_section(fig.add_subplot(gs[0]), rec, i if steps else None, highlight=True)
-            V.draw_top(fig.add_subplot(gs[1]), rec, self.outlines(self.sample), i if steps else None)
+            outs = self.outlines(self.sample)
+            V.draw_section(fig.add_subplot(gs[0]), rec, i if steps else None, highlight=True, outlines=outs)
+            v["top_ax"] = fig.add_subplot(gs[1])
+            V.draw_top(v["top_ax"], rec, outs, i if steps else None)
             fig.tight_layout(pad=0.6)
         except Exception as e:                                   # 示意圖畫不出來不要影響其他功能
             self.app.log(f"示意圖：{e}")
@@ -986,6 +1110,51 @@ class SamplePage:
         else:
             v["cap"].configure(text="還沒有步驟：按「＋ 新增步驟」")
         v["canvas"].draw_idle()
+
+    # ---- 剖面的切線：在俯視圖上點兩下（起點 A、終點 A'），存進紀錄檔
+    def start_cut(self):
+        if not self.sample:
+            return
+        if not any(not o.get("electrode") for o in self.outlines(self.sample)):
+            self.app.status("這個樣品沒有 digitalize 的 flake 輪廓檔，剖面是示意版面，不能設定切線", "warn")
+            return
+        self._cut_pts = []
+        self.vis["cap"].configure(text="✂ 在下面的俯視圖上點兩下：先點起點 A、再點終點 A'（按「↺ 自動」恢復自動切線）")
+
+    def _on_vis_click(self, ev):
+        if self._cut_pts is None or ev.inaxes is None or ev.inaxes is not self.vis.get("top_ax") or ev.xdata is None:
+            return
+        self._cut_pts.append([float(ev.xdata), float(ev.ydata)])
+        if len(self._cut_pts) == 1:
+            ev.inaxes.plot([ev.xdata], [ev.ydata], "o", color="#be185d", zorder=11)
+            self.vis["canvas"].draw_idle()
+            self.vis["cap"].configure(text="✂ 再點終點 A'")
+            return
+        pts, self._cut_pts = self._cut_pts, None
+        self.set_cut(pts)
+
+    def set_cut(self, pts):
+        """pts = [[x1, y1], [x2, y2]]；None = 自動切線。存進紀錄檔（不會寫試算表）。"""
+        s = self.sample
+        if not s:
+            return False
+        self._cut_pts = None
+        rec = copy.deepcopy(self.lib.preview(s))
+        vis = rec.setdefault("visual", {})
+        if pts:
+            vis["cut"] = [list(map(float, pts[0])), list(map(float, pts[1]))]
+        else:
+            vis.pop("cut", None)
+        try:
+            R.save(rec, s["path"])
+        except OSError as e:
+            self.app.status(f"切線存不進紀錄檔：{e}", "error")
+            return False
+        s["rec"] = rec
+        s.pop("rec_preview", None)
+        self.app.status("已設定剖面切線" if pts else "剖面改回自動切線", "ok")
+        self._vis_draw()
+        return True
 
     def _on_scale(self, val):
         if getattr(self, "_vis_lock", False):
@@ -1088,7 +1257,21 @@ class SamplePage:
     def edit_step(self, s, sid, new):
         rec = copy.deepcopy(self.lib.preview(s))
         step = E.update_step(rec, sid, new, self.user())
-        self.commit(s, rec, f"已修改 {K.step_name(step)}", select_step=sid)
+        n = self._resolve_step_reviews(rec, sid)
+        self.commit(s, rec, f"已修改 {K.step_name(step)}" + (f"（{n} 項待確認一併標成已確認）" if n else ""),
+                    select_step=sid)
+
+    @staticmethod
+    def _resolve_step_reviews(rec, sid):
+        """使用者改過這一步 = 看過了：這一步的待確認自動標成已確認。"""
+        n = 0
+        for r in rec.get("review", []):
+            if r.get("step") == sid and not r.get("resolved"):
+                r["resolved"] = True
+                r["resolved_at"] = time.strftime("%Y-%m-%d %H:%M")
+                r["by"] = "edit"
+                n += 1
+        return n
 
     def delete_selected_step(self, confirm=True):
         sid = self._selected_step()
@@ -1100,6 +1283,7 @@ class SamplePage:
                                                parent=self.app.root):
             return
         E.delete_step(rec, sid, self.user())
+        self._resolve_step_reviews(rec, sid)
         self.commit(self.sample, rec, f"已刪除 {K.step_name(step)}")
 
     def move_selected(self, delta):
@@ -1286,7 +1470,8 @@ class SamplePage:
     def save_template(self, s, tpl):
         """PPT 模板存進紀錄檔（不會寫試算表）。"""
         rec = copy.deepcopy(self.lib.preview(s))
-        rec["ppt"] = {k: tpl.get(k) for k in ("title", "subtitle", "include", "skip_steps", "step_notes")}
+        rec["ppt"] = {k: tpl.get(k) for k in ("title", "subtitle", "reporter", "headline", "story", "results", "problems",
+                                              "next", "include", "skip_steps", "step_notes")}
         try:
             R.save(rec, s["path"])
         except OSError as e:
@@ -1335,7 +1520,8 @@ class SampleSettings(_Dialog):
         c = sample_settings(page.app.settings)
         self.vars = {k: tk.StringVar(value=str(c.get(k, ""))) for k in ("user", "root", "record_name", "sheet",
                                                                         "service_account", "sheet_script_url",
-                                                                        "sheet_token")}
+                                                                        "sheet_token", "klayout_path", "autocad_path")}
+        self.cad = tk.StringVar(value="AutoCAD" if c.get("cad_default") == "autocad" else "KLayout")
         self.sync = tk.BooleanVar(value=bool(c.get("sheet_sync")))
         rule = c.get("folder_rule") or F.DEFAULT_RULE
         preset = next((n for n, r in F.RULE_PRESETS if r == rule), "自訂（正規表示式）")
@@ -1347,7 +1533,9 @@ class SampleSettings(_Dialog):
                 ("試算表", "sheet", "Google Sheet 網址，或下載的 .xlsx / .csv 檔"),
                 ("服務帳號金鑰", "service_account", "空白 = 和蝕刻紀錄共用（secrets\\service_account.json）"),
                 ("Apps Script 網址", "sheet_script_url", "裝在「樣品試算表」裡的 Apps Script（…/exec）；和蝕刻紀錄的是不同一份"),
-                ("通行碼", "sheet_token", "Apps Script 執行 setupToken 後顯示的通行碼（只存在這台電腦）")]
+                ("通行碼", "sheet_token", "Apps Script 執行 setupToken 後顯示的通行碼（只存在這台電腦）"),
+                ("KLayout 位置", "klayout_path", "空白 = 自動找（Windows：…\\KLayout\\klayout_app.exe）"),
+                ("AutoCAD 位置", "autocad_path", "空白 = 自動找（C:\\Program Files\\Autodesk\\AutoCAD 20xx\\acad.exe）")]
         for r, (lab, key, hint) in enumerate(rows):
             tk.Label(self, text=lab, bg=T.CARD, fg=T.TEXT, font=T.font(10, "bold")).grid(row=2 * r, column=0, sticky="w",
                                                                                        pady=(6, 0))
@@ -1355,7 +1543,7 @@ class SampleSettings(_Dialog):
             if key == "root":
                 ttk.Button(self, text="選…", style=f"{KEY}.Small.TButton", command=self._pick_root).grid(
                     row=2 * r, column=2, padx=(4, 0), pady=(6, 0))
-            if key in ("sheet", "service_account"):
+            if key in ("sheet", "service_account", "klayout_path", "autocad_path"):
                 ttk.Button(self, text="選…", style=f"{KEY}.Small.TButton",
                            command=lambda k=key: self._pick_file(k)).grid(row=2 * r, column=2, padx=(4, 0), pady=(6, 0))
             tk.Label(self, text=hint, bg=T.CARD, fg=T.MUTED, font=T.font(8)).grid(row=2 * r + 1, column=1, sticky="w")
@@ -1375,10 +1563,17 @@ class SampleSettings(_Dialog):
                         style=f"{KEY}.TCheckbutton").pack(side="left")
         ttk.Button(sf, text="📋 複製 Apps Script 程式碼", style=f"{KEY}.Small.TButton", command=self._copy_script).pack(
             side="left", padx=(8, 0))
+        cf = tk.Frame(self, bg=T.CARD)
+        cf.grid(row=r + 6, column=1, columnspan=2, sticky="w", pady=(6, 0))
+        tk.Label(cf, text="DXF / GDS 預設用", bg=T.CARD, fg=T.TEXT, font=T.font(10)).pack(side="left")
+        ttk.Combobox(cf, textvariable=self.cad, values=["KLayout", "AutoCAD"], state="readonly", width=10).pack(
+            side="left", padx=(6, 0))
+        tk.Label(cf, text="（另一個程式的按鈕也會一直在旁邊；DWG 一律用 AutoCAD）", bg=T.CARD, fg=T.MUTED, font=T.font(8)).pack(
+            side="left", padx=(6, 0))
         self.msg = tk.Label(self, text="", bg=T.CARD, fg=T.MUTED, font=T.font(8), anchor="w")
         self.msg.grid(row=r + 4, column=1, columnspan=2, sticky="w")
         bf = tk.Frame(self, bg=T.CARD)
-        bf.grid(row=r + 5, column=0, columnspan=3, sticky="e", pady=(14, 0))
+        bf.grid(row=r + 7, column=0, columnspan=3, sticky="e", pady=(14, 0))
         ttk.Button(bf, text="取消", style=f"{KEY}.Ghost.TButton", command=self.destroy).pack(side="right")
         ttk.Button(bf, text="儲存", style=f"{KEY}.Accent.TButton", command=self.save).pack(side="right", padx=(0, 6))
         self.columnconfigure(1, weight=1)
@@ -1401,7 +1596,8 @@ class SampleSettings(_Dialog):
             self.vars["root"].set(os.path.normpath(d))
 
     def _pick_file(self, key):
-        types = [("試算表", "*.xlsx *.csv *.tsv"), ("全部", "*.*")] if key == "sheet" else [("JSON", "*.json")]
+        types = ([("試算表", "*.xlsx *.csv *.tsv"), ("全部", "*.*")] if key == "sheet" else
+                 [("程式", "*.exe *.app"), ("全部", "*.*")] if key.endswith("_path") else [("JSON", "*.json")])
         p = filedialog.askopenfilename(parent=self, filetypes=types)
         if p:
             self.vars[key].set(os.path.normpath(p))
@@ -1419,7 +1615,8 @@ class SampleSettings(_Dialog):
                                                     "要繼續嗎？", parent=self):
                 return
         self.page.save_cfg(**{k: v.get().strip() for k, v in self.vars.items()}, folder_rule=self.rule_var.get().strip(),
-                           record_name=name, sheet_sync=bool(self.sync.get()))
+                           record_name=name, sheet_sync=bool(self.sync.get()),
+                           cad_default="autocad" if self.cad.get() == "AutoCAD" else "klayout")
         self.destroy()
 
 
@@ -1540,8 +1737,8 @@ class ReviewDialog(_Dialog):
         self.geometry(f"{T.px(860)}x{T.px(520)}")
         self.head = tk.Label(self, text="", bg=T.CARD, fg=T.TEXT, font=T.font(12, "bold"), anchor="w")
         self.head.pack(fill="x")
-        tk.Label(self, text="雙擊一列跳到那個樣品；看過、沒問題就按「已確認」（會記在樣品的紀錄檔裡）。"
-                            "要修改步驟的話，編輯功能在下一版。", bg=T.CARD, fg=T.MUTED, font=T.font(9), anchor="w").pack(fill="x")
+        tk.Label(self, text="雙擊一列跳到那個樣品；沒問題就按「已確認」；種類推錯、參數要補 → 「✎ 修改這一步」（改完自動算已確認）。",
+                 bg=T.CARD, fg=T.MUTED, font=T.font(9), anchor="w").pack(fill="x")
         f = tk.Frame(self, bg=T.CARD)
         f.pack(fill="both", expand=True, pady=(8, 0))
         self.tree = ttk.Treeview(f, columns=("sample", "msg"), show="headings", style=f"{KEY}.Treeview")
@@ -1559,7 +1756,21 @@ class ReviewDialog(_Dialog):
         ttk.Button(bf, text="關閉", style=f"{KEY}.Ghost.TButton", command=self.destroy).pack(side="right")
         ttk.Button(bf, text="✓ 已確認", style=f"{KEY}.Accent.TButton", command=self.resolve).pack(side="right", padx=(0, 6))
         ttk.Button(bf, text="跳到樣品", style=f"{KEY}.Small.TButton", command=self.jump).pack(side="left")
+        ttk.Button(bf, text="✎ 修改這一步", style=f"{KEY}.Small.TButton", command=self.edit).pack(side="left", padx=(6, 0))
         self.fill()
+
+    def edit(self):
+        """跳到那個樣品並打開那一步的編輯（改完自動算已確認）。"""
+        sel = self.tree.selection()
+        if not sel:
+            return None
+        s, r = self.items[sel[0]]
+        if not r.get("step"):
+            return None
+        self.jump()
+        rec = self.page.record(s)
+        step = E.find(rec, r["step"])
+        return self.page.open_step_editor(s, rec, step) if step else None
 
     def fill(self):
         self.items = {}
