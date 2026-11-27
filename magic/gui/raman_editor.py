@@ -154,7 +154,7 @@ class RamanEditor(tk.Toplevel):
             return f
 
         def lab(text, size=9, fg=None, bold=False):
-            return lambda f: tk.Label(f, text=text, bg=S, fg=fg or T.MUTED, font=T.font(size, "bold" if bold else None))
+            return lambda f: tk.Label(f, text=text, bg=S, fg=fg or T.MUTED, font=T.font(size, "bold") if bold else T.font(size))
 
         # ---- 工具
         r1 = WrapRow(bar, bg=S, padx=6)
