@@ -124,6 +124,48 @@ def main():
             ts.append((time.perf_counter() - t) * 1e3)
         print(f"{key:8s} 只重新顯示圖（{w.winfo_width()}×{w.winfo_height()}）：{sorted(ts)[2]:.1f} ms")
 
+    # ---------------- 中欄再細分：每個子元件拿掉再放回去 ----------------
+    def remap_ms(w):
+        mgr = w.winfo_manager()
+        if mgr not in ("pack", "grid"):
+            return None
+        info = w.pack_info() if mgr == "pack" else w.grid_info()
+        info.pop("in", None)
+        sib = [c for c in w.master.pack_slaves()] if mgr == "pack" else []
+        ts = []
+        for _ in range(3):
+            (w.pack_forget if mgr == "pack" else w.grid_remove)()
+            root.update()
+            t = time.perf_counter()
+            if mgr == "pack":
+                i = sib.index(w)
+                nxt = sib[i + 1] if i + 1 < len(sib) else None
+                w.pack(**info, **({"before": nxt} if nxt is not None else {}))
+            else:
+                w.grid()
+            root.update()
+            ts.append((time.perf_counter() - t) * 1e3)
+        return sorted(ts)[1]
+
+    def walk(w, depth, out, prefix=""):
+        for c in w.winfo_children():
+            if not c.winfo_manager() or not c.winfo_ismapped():
+                continue
+            ms = remap_ms(c) if depth <= 4 else None
+            if ms is not None:
+                out.append((ms, f"{prefix}{c.winfo_class()}({count(c)})", str(c)[-40:]))
+            if depth < 4:
+                walk(c, depth + 1, out, prefix + "  ")
+
+    for key in ("PPMS", "Etching"):
+        app.segment.select(key)
+        root.update()
+        out = []
+        walk(app.pages[key].mid, 1, out)
+        print(f"--- {key} 中欄：最花時間的子元件（ms、類別(元件數)）")
+        for ms, cls, name in sorted(out, reverse=True)[:14]:
+            print(f"  {ms:6.1f}  {cls:40s} {name}")
+
     # ---------------- 蝕刻動畫 ----------------
     print("=" * 70)
     print("蝕刻動畫：每一格的時間（ms）")
