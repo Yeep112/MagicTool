@@ -1,5 +1,5 @@
 /**
- * Magic Tool ↔ Google Sheet（蝕刻紀錄）寫入程式　version 1
+ * Magic Tool ↔ Google Sheet（蝕刻紀錄、樣品試算表）寫入程式　version 2
  *
  * 裝法（只要做一次，試算表的擁有者做就好）：
  *   1. 打開試算表 → 擴充功能 → Apps Script → 把原本的程式全部刪掉，貼上這整份 → 💾 儲存
@@ -16,7 +16,7 @@
  *   ‧ 只寫 Magic Tool 指定的格子；其他欄位、公式、格式都不動
  *   ‧ 改了這份程式以後：部署 → 管理部署作業 → ✎ → 版本選「新版本」→ 部署（網址不變）
  */
-var VERSION = 1;
+var VERSION = 2;
 var HISTORY_SHEET = 'MagicTool 修改紀錄';
 
 function setupToken() {
@@ -85,6 +85,14 @@ function handle_(req) {
     backup_(ss, sh, req.row, '修改');
     writeCells_(sh, req.row, req.cells || []);
     out.row = req.row;
+  } else if (act === 'insert_cols') {
+    // 樣品試算表：Process 格子不夠時，在「備註」欄前面插入空白欄（整欄插入，其他列的資料一起往右移，不會錯位）
+    var before = Number(req.before), count = Math.min(Number(req.count) || 0, 30);
+    if (!(before >= 1) || !(count >= 1)) throw new Error('插入欄的位置不對');
+    var hv = sh.getRange(1, before + 1, 1, 1).getDisplayValues()[0][0];
+    if (String(req.expect_header || '') !== String(hv).trim()) throw new Error('標題列和預期的不一樣，為了不插錯位置，沒有插入');
+    sh.insertColumnsBefore(before + 1, count);
+    out.cols = count;
   } else if (act === 'delete') {
     check_(sh, req.row, req.expect || []);
     backup_(ss, sh, req.row, '刪除');

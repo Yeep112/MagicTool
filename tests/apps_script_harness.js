@@ -28,6 +28,10 @@ function makeSheet(name, id, rows, maxRows, maxCols) {
     },
     getDataRange() { return this.getRange(1, 1, Math.max(1, this.getLastRow()), Math.max(1, this.getLastColumn())); },
     deleteRow(r) { this.grid.splice(r - 1, 1); },
+    insertColumnsBefore(c, n) {
+      this.grid.forEach(row => { while (row.length < c - 1) row.push(''); row.splice(c - 1, 0, ...Array(n).fill('')); });
+      this.maxCols += n;
+    },
     getRange(r, c, nr, nc) {
       const sheet = this;
       if (r + nr - 1 > sheet.maxRows || c + nc - 1 > sheet.maxCols) {

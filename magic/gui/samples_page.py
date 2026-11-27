@@ -1,10 +1,12 @@
 """製程 → 樣品頁：左 = 樣品清單、中 = 製程時間軸、右 = 步驟細節（參數、子步驟、資料夾、照片、資料檔）。
 
 資料來源：樣品資料夾（主要紀錄，每個樣品一個 <資料夾名稱>.json）＋ 試算表（匯入初版、之後只當總覽）。
-v0.6：瀏覽、從試算表匯入建立紀錄檔、待確認清單。新增 / 編輯步驟、擱置 / 放棄按鈕在 v0.7。
+v0.6：瀏覽、從試算表匯入建立紀錄檔、待確認清單。
+v0.7：新增 / 編輯 / 搬移 / 刪除步驟（samples_edit.py）、擱置 / 放棄、結果、新樣品、自動更新試算表。
 """
 from __future__ import annotations
 
+import copy
 import os
 import sys
 import time
@@ -12,11 +14,14 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 from ..core import settings as S
+from ..fab import edit as E
 from ..fab import folders as F
 from ..fab import records as R
 from ..fab import sheet as SH
 from ..fab import steps as K
 from . import theme as T
+from . import samples_edit as SE
+from .samples_edit import _Dialog
 from .widgets import Chip, Paned, ScrollFrame, section_title
 
 KEY = "Samples"
@@ -44,6 +49,9 @@ def sample_settings(settings):
     s.setdefault("folder_rule", F.DEFAULT_RULE)
     s.setdefault("sheet", "")
     s.setdefault("service_account", "")
+    s.setdefault("sheet_sync", False)
+    s.setdefault("sheet_script_url", "")
+    s.setdefault("sheet_token", "")
     return s
 
 
@@ -88,6 +96,9 @@ class SamplePage:
         self._imgs = []
         self._scan_gen = 0
         self.scanning = False
+        self._scan_listeners = []
+        import threading
+        self._sync_lock = threading.Lock()
         self.cfg = sample_settings(app.settings)
         self._build()
 
@@ -161,6 +172,12 @@ class SamplePage:
                  font=T.font(8), anchor="w").pack(fill="x", pady=(2, 0))
         bf = tk.Frame(self.left, bg=T.CARD)
         bf.pack(fill="x", pady=(8, 0))
+        b0 = tk.Frame(bf, bg=T.CARD)
+        b0.pack(fill="x", pady=(0, 6))
+        ttk.Button(b0, text="＋ 新樣品", style=f"{KEY}.Ghost.TButton", command=self.open_new_sample).pack(
+            side="left", fill="x", expand=True)
+        self.sync_btn = ttk.Button(b0, text="☁ 試算表", style=f"{KEY}.Ghost.TButton", command=self.open_sync)
+        self.sync_btn.pack(side="left", padx=(6, 0))
         ttk.Button(bf, text="📥 從試算表匯入", style=f"{KEY}.Accent.TButton", command=self.open_import).pack(fill="x")
         b2 = tk.Frame(bf, bg=T.CARD)
         b2.pack(fill="x", pady=(6, 0))
@@ -189,6 +206,12 @@ class SamplePage:
         self.open_btn = ttk.Button(cbtn, text="📂 開啟樣品資料夾", style=f"{KEY}.Small.TButton", command=self.open_sample_dir)
         self.open_btn.pack(side="left")
         self.make_btn = ttk.Button(cbtn, text="建立紀錄檔", style=f"{KEY}.Small.TButton", command=self.create_record)
+        self.res_btn = ttk.Button(cbtn, text="✎ 結果", style=f"{KEY}.Small.TButton", command=self.open_results)
+        self.res_btn.pack(side="right")
+        self.ab_btn = ttk.Button(cbtn, text="✕ 放棄", style=f"{KEY}.Small.TButton", command=lambda: self.toggle_state("abandoned"))
+        self.ab_btn.pack(side="right", padx=(0, 4))
+        self.hold_btn = ttk.Button(cbtn, text="⏸ 擱置", style=f"{KEY}.Small.TButton", command=lambda: self.toggle_state("hold"))
+        self.hold_btn.pack(side="right", padx=(0, 4))
         self.prev_lab = tk.Label(self.mid, text="", bg=T.CARD, fg=T.WARNING, font=T.font(9), anchor="w", justify="left",
                                  wraplength=T.px(440))
         self.prev_lab.pack(fill="x", pady=(6, 0))
@@ -199,8 +222,17 @@ class SamplePage:
         rvf = tk.Frame(vp, bg=T.CARD)
         vp.add_pane(tlf, stretch=True, minsize=T.px(160))
         vp.add_pane(rvf, stretch=False, size=T.px(150), minsize=T.px(70))
-        row, _ = section_title(tlf, "製程時間軸", "⋮", a["main"])
-        row.pack(fill="x", pady=(0, 4))
+        th = tk.Frame(tlf, bg=T.CARD)
+        th.pack(fill="x", pady=(0, 4))
+        row, _ = section_title(th, "製程時間軸", "⋮", a["main"])
+        row.pack(side="left")
+        self.tl_btns = []
+        for txt, cmd in (("🗑", self.delete_selected_step), ("↓", lambda: self.move_selected(1)),
+                         ("↑", lambda: self.move_selected(-1)), ("✎ 編輯", self.edit_selected_step),
+                         ("＋ 新增步驟", self.new_step)):
+            b = ttk.Button(th, text=txt, style=f"{KEY}.Small.TButton", command=cmd, width=len(txt) + 1 if len(txt) > 2 else 3)
+            b.pack(side="right", padx=(4, 0))
+            self.tl_btns.append(b)
         tf = tk.Frame(tlf, bg=T.CARD)
         tf.pack(fill="both", expand=True)
         self.tl = ttk.Treeview(tf, columns=("step", "date", "dirs", "info"), show="headings", selectmode="browse",
@@ -216,6 +248,7 @@ class SamplePage:
         self.tl.pack(side="left", fill="both", expand=True)
         tsb.pack(side="right", fill="y")
         self.tl.bind("<<TreeviewSelect>>", lambda e: self._on_pick_step())
+        self.tl.bind("<Double-Button-1>", lambda e: self.edit_selected_step())
         rh = tk.Frame(rvf, bg=T.CARD)
         rh.pack(fill="x", pady=(6, 2))
         self.rv_title = tk.Label(rh, text="⚠ 待確認", bg=T.CARD, fg=T.WARNING, font=T.font(10, "bold"))
@@ -278,6 +311,10 @@ class SamplePage:
         self.demo_btn.pack_forget() if self.cfg.get("root") else self.demo_btn.pack(side="left", padx=(6, 0))
         self.refresh_list(select=want)
         self._update_review_btn()
+        self._update_sync_btn()
+        for cb in self._scan_listeners:
+            cb()
+        self._scan_listeners = []
 
     def _filtered(self):
         if not self.lib:
@@ -346,6 +383,9 @@ class SamplePage:
         self.tl.delete(*self.tl.get_children())
         self.rv_list.delete(0, "end")
         self.make_btn.pack_forget()
+        on = ["!disabled"] if s is not None else ["disabled"]
+        for b in [self.hold_btn, self.ab_btn, self.res_btn] + self.tl_btns:
+            b.state(on)
         if s is None:
             self.s_title.configure(text="選一個樣品")
             self.s_state.set("")
@@ -357,6 +397,8 @@ class SamplePage:
         rec = self.record(s)
         st = rec.get("status") or {}
         state = st.get("state", "active")
+        self.hold_btn.configure(text="▶ 繼續製作" if state == "hold" else "⏸ 擱置")
+        self.ab_btn.configure(text="↺ 取消放棄" if state == "abandoned" else "✕ 放棄")
         self.s_title.configure(text=s["label"])
         self.s_state.set(K.state_label(state), fg="#ffffff", bg=K.STATES.get(state, K.STATES["active"])[2])
         sub = [rec.get("type") or "", f"開始 {rec['start'].replace('-', '/')}" if rec.get("start") else "",
@@ -377,6 +419,11 @@ class SamplePage:
             parts.append("超導 contact" + (f"（on {res['sc_on']}）" if res.get("sc_on") else ""))
         if res.get("tc_k") is not None:
             parts.append(f"Tc {res['tc_k']:g} K")
+        sync = rec.get("sync") or {}
+        if sync.get("state") == "pending":
+            parts.append("☁ 試算表待更新")
+        elif sync.get("state") == "error":
+            parts.append("☁ 試算表更新失敗（按左下「☁ 試算表」重試）")
         self.s_res.configure(text="　".join(parts))
         self.open_btn.state(["!disabled"] if s["has_folder"] else ["disabled"])
         if s.get("rec") is None:
@@ -522,8 +569,11 @@ class SamplePage:
         name = K.label(kind) + (f" #{step.get('n', 1)}" if kind in K.GROUP_KINDS else "")
         tk.Label(head, text=name, bg=T.CARD, fg=T.TEXT, font=T.font(15, "bold")).pack(side="left", padx=(10, 6))
         Chip(head, K.CATEGORIES[K.category(kind)][0], fg="#ffffff", bg=col).pack(side="left")
+        ttk.Button(head, text="✎ 編輯這一步", style=f"{KEY}.Small.TButton",
+                   command=lambda: self.open_step_editor(s, rec, step)).pack(side="right")
         src = step.get("source", [])
-        srct = "資料夾＋試算表" if len(src) == 2 else ("只有資料夾" if "folder" in src else "只有試算表")
+        srct = ("手動新增" if "manual" in src else "資料夾＋試算表" if len(src) == 2 else
+                "只有資料夾" if "folder" in src else "只有試算表") + ("（在軟體裡改過）" if step.get("edited") else "")
         dt = _date_text(step.get("date", ""), step.get("date_end", ""))
         tk.Label(self.body, text="　".join(x for x in (dt or "（照片檔名沒有日期）", srct) if x), bg=T.CARD, fg=T.MUTED,
                  font=T.font(9), anchor="w").pack(fill="x", pady=(4, 0))
@@ -774,6 +824,12 @@ class SamplePage:
     # ---- 匯入（對話框與自我測試共用）
     def fetch_sheet(self, source):
         sa = self.cfg.get("service_account") or str(S.service_account_path(self.app.settings))
+        if (self.cfg.get("sheet_script_url") or "").strip() and SH.sheet_key(source) == SH.sheet_key(self.cfg.get("sheet", "")) \
+                and "docs.google.com" in source:
+            try:                                                # 試算表不公開也讀得到
+                return SH.parse_table(self.sheet_writer().values())
+            except Exception:
+                pass
         rows = SH.parse_table(SH.fetch(source, sa))
         return rows
 
@@ -791,16 +847,228 @@ class SamplePage:
         self.refresh_list()
         self._update_review_btn()
 
+    # ================================================================== v0.7：編輯
+    def user(self):
+        return self.cfg.get("user") or "me"
 
-class _Dialog(tk.Toplevel):
-    """關閉時在主執行緒放掉 StringVar 等變數：不然有時會在背景執行緒被回收，回收時又呼叫 Tk 而出錯。"""
+    def _selected_step(self):
+        sel = self.tl.selection()
+        return sel[0] if sel else None
 
-    def destroy(self):
-        super().destroy()
-        for k, v in list(vars(self).items()):
-            if isinstance(v, tk.Variable) or (isinstance(v, dict) and v and
-                                              all(isinstance(x, tk.Variable) for x in v.values())):
-                setattr(self, k, None)
+    def open_step_editor(self, s, rec, step=None, after=None):
+        return SE.StepEditor(self, s, copy.deepcopy(rec), copy.deepcopy(step) if step else None, after)
+
+    def new_step(self):
+        if not self.sample:
+            return None
+        rec = self.record()
+        after = self._selected_step() or (rec["steps"][-1]["id"] if rec.get("steps") else None)
+        return self.open_step_editor(self.sample, rec, None, after)
+
+    def edit_selected_step(self):
+        sid = self._selected_step()
+        if not self.sample or not sid:
+            return None
+        rec = self.record()
+        step = E.find(rec, sid)
+        return self.open_step_editor(self.sample, rec, step) if step else None
+
+    def add_step(self, s, new, after=None):
+        rec = copy.deepcopy(self.lib.preview(s))
+        sid = E.insert_step(rec, new, after, self.user())
+        self.commit(s, rec, f"已新增 {K.step_name(E.find(rec, sid))}", select_step=sid)
+        return sid
+
+    def edit_step(self, s, sid, new):
+        rec = copy.deepcopy(self.lib.preview(s))
+        step = E.update_step(rec, sid, new, self.user())
+        self.commit(s, rec, f"已修改 {K.step_name(step)}", select_step=sid)
+
+    def delete_selected_step(self, confirm=True):
+        sid = self._selected_step()
+        if not self.sample or not sid:
+            return
+        rec = copy.deepcopy(self.record())
+        step = E.find(rec, sid)
+        if confirm and not messagebox.askyesno("刪除步驟", f"刪除「{K.step_name(step)}」？\n（資料夾和照片不會被刪，只是紀錄裡拿掉這一步）",
+                                               parent=self.app.root):
+            return
+        E.delete_step(rec, sid, self.user())
+        self.commit(self.sample, rec, f"已刪除 {K.step_name(step)}")
+
+    def move_selected(self, delta):
+        sid = self._selected_step()
+        if not self.sample or not sid:
+            return
+        rec = copy.deepcopy(self.record())
+        if E.move_step(rec, sid, delta, self.user()):
+            self.commit(self.sample, rec, "", select_step=sid)
+
+    def toggle_state(self, which):
+        if not self.sample:
+            return None
+        state = (self.record().get("status") or {}).get("state", "active")
+        if which == state:                                   # 繼續製作 / 取消放棄
+            self.change_state(self.sample, "active")
+            return None
+        return SE.StateDialog(self, self.sample, which)
+
+    def change_state(self, s, state, reason="", next_date=None):
+        rec = copy.deepcopy(self.lib.preview(s))
+        E.set_state(rec, state, reason, next_date, user=self.user())
+        self.commit(s, rec, f"{s['label']}：{K.state_label(state)}")
+
+    def open_results(self, source_page=None):
+        return SE.ResultDialog(self, self.sample, source_page)
+
+    def save_results(self, s, vals, source=""):
+        rec = copy.deepcopy(self.lib.preview(s))
+        E.set_results(rec, source=source, user=self.user(), **vals)
+        self.commit(s, rec, f"{s['label']}：已更新結果")
+
+    def open_new_sample(self):
+        return SE.NewSampleDialog(self)
+
+    def create_sample(self, label, typ="", start="", project=""):
+        """project = None → 存在這台電腦；"" → 根目錄底下；其他 → 那個專案資料夾底下。"""
+        if self.lib and any(x["label"].lower() == label.lower() for x in self.lib.samples):
+            raise ValueError(f"已經有「{label}」這個樣品了")
+        if project is None or not self.cfg.get("root"):
+            d, path = "", R.local_path(S.data_dir(), self.user(), label)
+        else:
+            parts = [self.cfg["root"]] + [p.strip() for p in project.split(" / ") if p.strip()] + [R.safe_name(label)]
+            d = os.path.join(*parts)
+            if os.path.isdir(d) and os.listdir(d):
+                raise ValueError(f"資料夾已經存在而且不是空的：{d}")
+            os.makedirs(d, exist_ok=True)
+            path = R.record_path(d, self.cfg.get("record_name"))
+        rec = {"label": label, "user": self.user(), "project": project or "", "type": typ, "start": start, "folder": d,
+               "status": {"state": "active", "stopped_at": None}, "results": {}, "steps": [], "review": [], "notes": "",
+               "created": time.strftime("%Y-%m-%d %H:%M:%S")}
+        E.log(rec, "建立樣品", "", self.user())
+        s = {"key": R.sample_key(self.user(), label), "label": label, "project": project or "", "dir": d, "path": path,
+             "rec": None, "has_folder": bool(d), "sheet": None}
+        if self.lib is not None:
+            self.lib.samples.append(s)
+            self.lib.samples.sort(key=lambda x: R._sort_key(x["label"]))
+        self.commit(s, rec, f"已建立樣品 {label}" + (f"：{d}" if d else "（紀錄存在這台電腦）"))
+        self.refresh_list(select=s["key"])
+        return s
+
+    def commit(self, s, rec, msg="", select_step=None):
+        """存紀錄檔 → 更新畫面 → （有開自動更新）背景寫進試算表。"""
+        if self.cfg.get("sheet_sync"):
+            rec["sync"] = {"state": "pending", "time": time.strftime("%Y-%m-%d %H:%M")}
+        try:
+            R.save(rec, s["path"])
+        except OSError as e:
+            messagebox.showerror("樣品紀錄", f"寫不進紀錄檔：{e}", parent=self.app.root)
+            return False
+        s["rec"] = rec
+        s.pop("rec_preview", None)
+        if msg:
+            self.app.status(msg, "ok")
+        if self.sample and self.sample["key"] == s["key"]:
+            self.step_id = select_step or self.step_id
+            self._show_sample(s, keep_step=True)
+            if select_step and self.tl.exists(select_step):
+                self.select_step(select_step)
+        self.refresh_list()
+        self._update_review_btn()
+        self._update_sync_btn()
+        if self.cfg.get("sheet_sync") and self.can_sync():
+            self.sync_many([s])
+        return True
+
+    # ---- RIE 時間建議用的蝕刻率
+    def etch_rates(self, kind="rie"):
+        from ..fab import etchrate as ER
+        recs = [x.get("rec") or x.get("rec_preview") for x in (self.lib.samples if self.lib else [])]
+        df = None
+        try:
+            from ..etching import store
+            df = store.read_log(S.etching_csv(self.app.settings))
+        except Exception:
+            df = None
+        return ER.rates_for([r for r in recs if r], df, kind)
+
+    # ---- 試算表
+    def can_sync(self):
+        c = self.cfg
+        if (c.get("sheet_script_url") or "").strip():
+            return bool((c.get("sheet_token") or "").strip())
+        sa = c.get("service_account") or str(S.service_account_path(self.app.settings))
+        return bool(c.get("sheet")) and "docs.google.com" in c.get("sheet", "") and os.path.isfile(sa)
+
+    def sheet_writer(self):
+        from ..fab import sheet_sync as SS
+        return SS.writer(self.cfg, str(S.service_account_path(self.app.settings)))
+
+    def pending_sync(self):
+        return [x for x in (self.lib.samples if self.lib else [])
+                if (x.get("rec") or {}).get("sync", {}).get("state") in ("pending", "error")]
+
+    def _update_sync_btn(self):
+        n = len(self.pending_sync())
+        self.sync_btn.configure(text=f"☁ 試算表（{n}）" if n else "☁ 試算表")
+
+    def sync_many(self, samples, done=None):
+        """背景把幾個樣品寫進試算表（一次讀整張表，再一個一個寫）。"""
+        jobs = [(x, copy.deepcopy(x["rec"])) for x in samples if x.get("rec") is not None]
+        if not jobs:
+            return
+
+        def work():
+            with self._sync_lock:                              # 一次只寫一批（不然同時新增可能重複加一列）
+                results, err = self._push_jobs(jobs)
+            self.app.post(("call", lambda: self._synced(results, err, done)))
+        self.app.submit(work)
+
+    def _push_jobs(self, jobs):
+        from ..fab import sheet_sync as SS
+        results, err = [], None
+        try:
+            sh = self.sheet_writer()
+            values = sh.values()
+            for s, rec in jobs:
+                try:
+                    act, row = SS.push(rec, sh, values)
+                    results.append((s, "ok", f"{act} {row}"))
+                    if act == "append" or getattr(sh, "_values_dirty", False):   # 加了列 / 插了欄 → 重新讀
+                        values = sh.values()
+                        sh._values_dirty = False
+                except Exception as e:
+                    results.append((s, "error", str(e)))
+        except Exception as e:
+            err = str(e)
+            results = [(s, "error", err) for s, _ in jobs]
+        return results, err
+
+    def _synced(self, results, err, done=None):
+        ok = 0
+        for s, state, info in results:
+            rec = s.get("rec")
+            if rec is None:
+                continue
+            rec["sync"] = {"state": state, "time": time.strftime("%Y-%m-%d %H:%M"), "info": info}
+            try:
+                R.save(rec, s["path"])
+            except OSError:
+                pass
+            ok += state == "ok"
+        bad = len(results) - ok
+        msg = f"試算表：已更新 {ok} 個樣品" + (f"，{bad} 個失敗：{err or results[-1][2]}" if bad else "")
+        self.app.status(msg, "ok" if not bad else "warn")
+        if bad:
+            self.app.log("樣品試算表更新失敗：\n" + "\n".join(f"{s['label']}：{i}" for s, st, i in results if st != "ok"))
+        self._update_sync_btn()
+        if self.sample:
+            self._show_sample(self.sample, keep_step=True)
+        if done:
+            done(msg)
+
+    def open_sync(self):
+        return SE.SyncDialog(self)
 
 
 class SampleSettings(_Dialog):
@@ -814,7 +1082,9 @@ class SampleSettings(_Dialog):
         self.transient(page.app.root)
         c = sample_settings(page.app.settings)
         self.vars = {k: tk.StringVar(value=str(c.get(k, ""))) for k in ("user", "root", "record_name", "sheet",
-                                                                        "service_account")}
+                                                                        "service_account", "sheet_script_url",
+                                                                        "sheet_token")}
+        self.sync = tk.BooleanVar(value=bool(c.get("sheet_sync")))
         rule = c.get("folder_rule") or F.DEFAULT_RULE
         preset = next((n for n, r in F.RULE_PRESETS if r == rule), "自訂（正規表示式）")
         self.rule_choice = tk.StringVar(value=preset)
@@ -823,7 +1093,9 @@ class SampleSettings(_Dialog):
                 ("樣品根目錄", "root", "例如 …\\SynologyDrive\\00 Users\\01 Yeep\\00 Samples（底下可以有專案資料夾）"),
                 ("紀錄檔名稱", "record_name", "{folder} = 樣品資料夾名稱，例如「{folder}.json」「{folder}_製程.json」"),
                 ("試算表", "sheet", "Google Sheet 網址，或下載的 .xlsx / .csv 檔"),
-                ("服務帳號金鑰", "service_account", "空白 = 和蝕刻紀錄共用（secrets\\service_account.json）")]
+                ("服務帳號金鑰", "service_account", "空白 = 和蝕刻紀錄共用（secrets\\service_account.json）"),
+                ("Apps Script 網址", "sheet_script_url", "裝在「樣品試算表」裡的 Apps Script（…/exec）；和蝕刻紀錄的是不同一份"),
+                ("通行碼", "sheet_token", "Apps Script 執行 setupToken 後顯示的通行碼（只存在這台電腦）")]
         for r, (lab, key, hint) in enumerate(rows):
             tk.Label(self, text=lab, bg=T.CARD, fg=T.TEXT, font=T.font(10, "bold")).grid(row=2 * r, column=0, sticky="w",
                                                                                        pady=(6, 0))
@@ -845,11 +1117,26 @@ class SampleSettings(_Dialog):
         ttk.Entry(self, textvariable=self.rule_var, width=58).grid(row=r + 1, column=1, sticky="we")
         tk.Label(self, text="自訂：第一組 = 編號、第二組 = 名稱（或用 (?P<no>…)、(?P<name>…)）", bg=T.CARD, fg=T.MUTED,
                  font=T.font(8)).grid(row=r + 2, column=1, sticky="w")
+        sf = tk.Frame(self, bg=T.CARD)
+        sf.grid(row=r + 3, column=1, columnspan=2, sticky="w", pady=(10, 0))
+        ttk.Checkbutton(sf, text="自動更新試算表（新增 / 修改步驟、狀態、結果時寫進試算表）", variable=self.sync,
+                        style=f"{KEY}.TCheckbutton").pack(side="left")
+        ttk.Button(sf, text="📋 複製 Apps Script 程式碼", style=f"{KEY}.Small.TButton", command=self._copy_script).pack(
+            side="left", padx=(8, 0))
+        self.msg = tk.Label(self, text="", bg=T.CARD, fg=T.MUTED, font=T.font(8), anchor="w")
+        self.msg.grid(row=r + 4, column=1, columnspan=2, sticky="w")
         bf = tk.Frame(self, bg=T.CARD)
-        bf.grid(row=r + 3, column=0, columnspan=3, sticky="e", pady=(14, 0))
+        bf.grid(row=r + 5, column=0, columnspan=3, sticky="e", pady=(14, 0))
         ttk.Button(bf, text="取消", style=f"{KEY}.Ghost.TButton", command=self.destroy).pack(side="right")
         ttk.Button(bf, text="儲存", style=f"{KEY}.Accent.TButton", command=self.save).pack(side="right", padx=(0, 6))
         self.columnconfigure(1, weight=1)
+
+    def _copy_script(self):
+        from ..etching import gsync
+        self.clipboard_clear()
+        self.clipboard_append(gsync.script_code())
+        self.msg.configure(text="已複製。打開樣品試算表 → 擴充功能 → Apps Script → 貼上 → 執行 setupToken → 部署成網頁應用程式"
+                                "（步驟和蝕刻紀錄一樣，見「Google Sheet 團隊設定.md」）", fg=T.SUCCESS)
 
     def _preset(self):
         r = dict(F.RULE_PRESETS).get(self.rule_choice.get())
@@ -880,7 +1167,7 @@ class SampleSettings(_Dialog):
                                                     "要繼續嗎？", parent=self):
                 return
         self.page.save_cfg(**{k: v.get().strip() for k, v in self.vars.items()}, folder_rule=self.rule_var.get().strip(),
-                           record_name=name)
+                           record_name=name, sheet_sync=bool(self.sync.get()))
         self.destroy()
 
 

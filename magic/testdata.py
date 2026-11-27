@@ -449,6 +449,15 @@ class FakeWorksheet:
     def append_row(self, row, **kw):
         self.grid.append([str(v) for v in row])
 
+    def insert_cols(self, values, col=1, **kw):
+        n = len(values)
+        self.calls.append(("insert_cols", col, n))
+        for r in self.grid:
+            while len(r) < col - 1:
+                r.append("")
+            r[col - 1:col - 1] = [""] * n
+        self.col_count += n
+
     def delete_rows(self, i):
         self.calls.append(("delete", i))
         self.grid.pop(i - 1)

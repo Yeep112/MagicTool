@@ -277,6 +277,15 @@ class GspreadSheet:
         self.ws.delete_rows(row)
         return row
 
+    def insert_cols(self, before, count, expect_header=""):
+        """在第 before 欄（0 起算）前面插入 count 個空白欄（整欄插入）。"""
+        head = (self.values() or [[]])[0]
+        if (head[before] if before < len(head) else "").strip() != expect_header:
+            raise SheetError("標題列和預期的不一樣，為了不插錯位置，沒有插入")
+        self.ws.insert_cols([[""]] * count, col=before + 1)
+        if getattr(self.ws, "col_count", None) is not None and not hasattr(self.ws, "grid"):
+            self.ws.col_count += count
+
 
 class ScriptSheet:
     """用 Apps Script 網頁應用程式寫（magic/etching/apps_script.gs）。"""
@@ -326,6 +335,9 @@ class ScriptSheet:
     def delete(self, row, expect):
         self.call("delete", row=row, expect=[list(e) for e in expect])
         return row
+
+    def insert_cols(self, before, count, expect_header=""):
+        self.call("insert_cols", before=before, count=count, expect_header=expect_header)
 
 
 # ---------------------------------------------------------------------------

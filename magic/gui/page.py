@@ -90,6 +90,9 @@ class Page:
         ttk.Button(bf, text="▶ 繪圖", style=f"{key}.Accent.TButton", command=self.plot).pack(side="left")
         ttk.Button(bf, text="存圖", style=f"{key}.Ghost.TButton", command=self.save_figure).pack(side="left", padx=(6, 0))
         ttk.Button(bf, text="匯出結果", style=f"{key}.Ghost.TButton", command=self.export).pack(side="left", padx=(6, 0))
+        if key in ("PPMS", "SQUID"):
+            ttk.Button(bf, text="📌 寫到樣品", style=f"{key}.Ghost.TButton", command=self.write_to_sample).pack(
+                side="left", padx=(6, 0))
         self.auto_var = tk.BooleanVar(value=self.st.get("auto", True))
         ttk.Checkbutton(bf, text="自動重畫", variable=self.auto_var, style=f"{key}.TCheckbutton",
                         command=lambda: self.remember(auto=bool(self.auto_var.get()))).pack(side="right")
@@ -124,6 +127,15 @@ class Page:
         bottom.bind("<Configure>", lambda e: set_if_changed(self.p_help, wraplength=max(e.width - 10, 150)))
         if self.current:
             self._show_params(self.current)
+
+    def write_to_sample(self):
+        """把分析結果（Tc、低溫電阻）寫進樣品的結果欄位（製程 → 樣品）。"""
+        sp = self.app.page("Samples")
+        if sp.lib is None or sp.scanning:
+            sp._scan_listeners.append(lambda: sp.open_results(self))
+            self.app.status("讀取樣品清單中…完成後會打開「樣品結果」")
+            return None
+        return sp.open_results(self)
 
     # ================================================================== Raman 工具
     def open_raman_editor(self):

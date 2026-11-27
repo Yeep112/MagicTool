@@ -67,6 +67,11 @@ def classify(text):
         return "contact", {}
     if low in ("top gate", "topgate", "top_gate"):
         return "top_gate", {}
+    simple = {"design": "design", "cleaning": "cleaning", "clean": "cleaning", "om": "inspection",
+              "om inspection": "inspection", "measure": "measurement", "measurement": "measurement",
+              "bonding": "bonding", "wire bonding": "bonding", "analysis": "analysis"}
+    if low in simple:
+        return simple[low], {}
     m = _RE["marker"].fullmatch(t)
     if m:
         tool = {"raith": "Raith", "evap": "蒸鍍"}.get((m.group(1) or "").lower(), "")
@@ -209,6 +214,9 @@ def parse_status(text, start=""):
     r = re.search(r"\bR_\s*([\d.]+)", raw, re.I)
     if r:
         out["results"]["r_ohm"] = _f(r.group(1))
+    tc = re.search(r"\bTc_?\s*([\d.]+)\s*K?\b", raw, re.I)
+    if tc:
+        out["results"]["tc_k"] = _f(tc.group(1).rstrip("."))
     if re.search(r"\(\s*sc\b", low):
         out["results"]["sc_contact"] = True
         on = re.search(r"sc\s+on\s+([A-Za-z0-9-]+)", raw, re.I)
@@ -216,7 +224,9 @@ def parse_status(text, start=""):
             out["results"]["sc_on"] = on.group(1)
     if "擱置" in raw:
         out.update(state="hold", reason=raw)
-    elif low.startswith("measure") or r:
+    elif low.startswith("measuring"):
+        out["state"] = "measuring"
+    elif low.startswith("measure") or r or tc:
         out["state"] = "measured"
     else:
         out["next"] = re.sub(r"[（(]\s*\d{1,2}\s*/\s*\d{1,2}\s*[)）]", "", raw).strip(" .")

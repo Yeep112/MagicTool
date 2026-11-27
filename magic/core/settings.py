@@ -47,6 +47,9 @@ DEFAULTS = {
         "folder_rule": "",           # 步驟資料夾的命名規則（正規表示式）；空白 = 「NN 名稱」
         "sheet": "",                 # 試算表網址或 .xlsx / .csv 檔
         "service_account": "",       # 空白 = 和蝕刻紀錄共用
+        "sheet_sync": False,         # True = 新增 / 修改步驟、狀態、結果時自動寫進試算表
+        "sheet_script_url": "",      # 裝在樣品試算表裡的 Apps Script 網址（…/exec）
+        "sheet_token": "",           # Apps Script 通行碼
     },
 }
 

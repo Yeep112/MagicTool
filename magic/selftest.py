@@ -1179,7 +1179,171 @@ def _gui_samples(app, root, pump):
     sd = SP.SampleSettings(pg)
     root.update()
     sd.destroy()
-    pg.save_cfg(root="", sheet="", user="")
+    _gui_samples_edit(app, root, pump, pg, p)
+    pg.save_cfg(root="", sheet="", user="", sheet_sync=False)
+
+
+def _gui_samples_edit(app, root, pump, pg, p):
+    """v0.7：新增 / 編輯 / 搬移 / 刪除步驟、RIE 時間建議、擱置 / 放棄、結果（含從量測頁帶入）、新樣品、寫回試算表。"""
+    from tkinter import messagebox
+    from .etching.gsync import GspreadSheet
+    from .fab import records as FR
+    from .fab import sheet as FSH
+    from .fab import steps as K
+    from .gui import samples_edit as SE
+    from .testdata import SAMPLE_SHEET, FakeWorksheet
+    ws = FakeWorksheet([list(r) for r in SAMPLE_SHEET])
+    pg.sheet_writer = lambda: GspreadSheet(ws)                     # 假的試算表（不連網路）
+    pg.can_sync = lambda: True
+    pg.save_cfg(rescan=False, sheet_sync=True)
+    saved = messagebox.askyesno
+    messagebox.askyesno = lambda *a, **k: True
+    try:
+        s = pg.find("901")
+        pg.refresh_list(select=s["key"])
+        root.update()
+        rec0 = pg.record()
+        n0 = len(rec0["steps"])
+        # ---- 新增 contact：勾 RIE（hBN 自動帶入前面 AFM 的厚度）→ 建議時間 → 套用 → 鍍膜
+        last = rec0["steps"][-1]["id"]
+        pg.tl.selection_set(last)
+        root.update()
+        ed = pg.new_step()
+        root.update()
+        assert ed.kind == "contact" and ed.subrows, "新增步驟預設要是 contact、有子步驟"
+        rie = next(r for r in ed.subrows if r["kind"] == "rie")
+        rie["on"].set(True)
+        assert rie["fs"].vars["hbn_nm"].get() == "48.5", f"RIE 的 hBN 厚度要帶入前面 AFM：{rie['fs'].vars['hbn_nm'].get()}"
+        rie["fs"].vars["oe_nm"].set("3")
+        ed.suggest(rie["fs"])
+        root.update()
+        assert rie["fs"].sug and "建議" in rie["fs"].sug_lab.cget("text"), rie["fs"].sug_lab.cget("text")
+        rie["fs"].sug_btn.invoke()
+        assert rie["fs"].vars["time_s"].get() == str(rie["fs"].sug["time_s"])
+        dep = next(r for r in ed.subrows if r["kind"] == "deposit")
+        dep["on"].set(True)
+        dep["fs"].vars["layers"].set("Cr/Au 5/60")
+        dep["fs"].vars["method"].set("E 蒸鍍")
+        ed.d1.set("2026/11/20")
+        ed.notes.insert("1.0", "selftest")
+        ed.save()
+        root.update()
+        rec = pg.record()
+        assert len(rec["steps"]) == n0 + 1 and s.get("rec") is not None, "新增的步驟沒有存進紀錄檔"
+        new = rec["steps"][-1]
+        assert new["kind"] == "contact" and new["date"] == "2026-11-20" and new["notes"] == "selftest"
+        assert [x["kind"] for x in new["substeps"]] == ["rie", "deposit"], new["substeps"]
+        assert new["substeps"][1]["params"] == {"layers": [["Cr", 5], ["Au", 60]], "method": "E"}
+        assert pg.tl.selection() == (new["id"],), "新增後要選到新的那一步"
+        # 寫回試算表（背景）→ 901 那一列的 Process 最後是新的 contact
+        assert pump(lambda: (pg.record().get("sync") or {}).get("state") == "ok", 15), pg.record().get("sync")
+        row = next(r for r in ws.get_all_values() if len(r) > 1 and r[1] == "901")
+        assert [c for c in row if c][-2:] == ["Cr/Au_5/60 (E)", "範例"], row
+        # ---- 編輯：看不懂的格式要擋下來；改好再存
+        ed = pg.edit_selected_step()
+        root.update()
+        dep = next(r for r in ed.subrows if r["kind"] == "deposit")
+        dep["fs"].vars["layers"].set("Cr/Au ten/70")
+        ed.save()
+        assert ed.winfo_exists() and "看不懂" in ed.err.cget("text"), "格式錯誤要顯示在對話框裡"
+        dep["fs"].vars["layers"].set("Cr/Au 10/70")
+        ed.save()
+        root.update()
+        assert pg.record()["steps"][-1]["substeps"][1]["params"]["layers"] == [["Cr", 10], ["Au", 70]]
+        # ---- 搬移、刪除
+        pg.move_selected(-1)
+        assert pg.record()["steps"][-2]["id"] == new["id"]
+        pg.move_selected(1)
+        pg.tl.selection_set(new["id"])
+        pg.delete_selected_step(confirm=False)
+        assert len(pg.record()["steps"]) == n0
+        # ---- 單獨一步 RIE：建議時間；transfer 預設堆疊
+        ed = SE.StepEditor(pg, s, pg.record(), None, None)
+        names = [f"{K.icon(k)} {K.label(k)}" for k in ed.kinds]
+        ed.kind_var.set(names[ed.kinds.index("transfer")])
+        ed._build_body()
+        assert "TaS2" in ed.main.vars["layers"].get(), ed.main.vars["layers"].get()
+        ed.destroy()
+        # ---- 擱置 → 繼續、放棄 → 取消放棄
+        sd = pg.toggle_state("hold")
+        sd.reason.set("等 Raith")
+        sd.date.set("2026-12-03")
+        sd.ok()
+        root.update()
+        assert pg.record()["status"]["state"] == "hold" and pg.hold_btn.cget("text") == "▶ 繼續製作"
+        assert "擱置" in pg.tree.set(s["key"], "state")
+        pg.toggle_state("hold")
+        assert pg.record()["status"]["state"] == "active"
+        ad = pg.toggle_state("abandoned")
+        ad.reason.set("破掉")
+        ad.ok()
+        root.update()
+        assert pg.record()["status"]["state"] == "abandoned" and "abandoned" in pg.tree.item(s["key"], "tags")
+        assert pg.record()["status"]["stopped_at"] == pg.record()["steps"][-1]["id"]
+        pg.toggle_state("abandoned")
+        assert pg.record()["status"]["state"] == "active" and pg.record()["status"]["stopped_at"] is None
+        # ---- 結果：手動填、從量測頁帶入
+        rd = pg.open_results()
+        rd.v["r_ohm"].set("1700")
+        rd.sc.set(True)
+        rd.v["sc_on"].set("TaS2")
+        rd.v["tc_k"].set("4.2")
+        rd.ok()
+        root.update()
+        res = pg.record()["results"]
+        assert (res["r_ohm"], res["sc_contact"], res["sc_on"], res["tc_k"]) == (1700, True, "TaS2", 4.2), res
+        assert "Tc 4.2 K" in pg.s_res.cget("text") and pg.record()["status"]["state"] == "measured"
+        assert pump(lambda: (pg.record().get("sync") or {}).get("state") == "ok", 15)
+        row = next(r for r in ws.get_all_values() if len(r) > 1 and r[1] == "901")
+        assert row[0] == "measured R_1700 (SC) sc on TaS2 Tc_4.2K", row[0]
+        assert FSH.parse_table(ws.get_all_values())[0]["results"]["tc_k"] == 4.2
+
+        class _It:
+            label, path = "demo.dat", os.path.join(p["901"], "19 Measurement", "demo.dat")
+
+        class _Fake:
+            key = "PPMS"
+            current = type("A", (), {"name": "R–T 與 Tc"})()
+            last = {"data": [{"item": _It(), "name": "降溫", "tc": 3.91, "res": {"y_s": 12.5}}]}
+
+        pg.sample = None
+        rd = SE.ResultDialog(pg, None, _Fake())
+        assert rd.current() is s, "量測檔案在樣品資料夾裡 → 要預設選那個樣品"
+        assert rd.v["tc_k"].get() == "3.91" and rd.v["r_ohm"].get() == "12.5", (rd.v["tc_k"].get(), rd.v["r_ohm"].get())
+        rd.ok()
+        assert pg.record(s)["results"]["source"] == "PPMS｜R–T 與 Tc"
+        pg.sample = s
+        wd = app.pages["PPMS"].write_to_sample()
+        root.update()
+        assert wd is not None and wd.winfo_exists(), "量測頁的「寫到樣品」要打開樣品結果"
+        wd.destroy()
+        # ---- 新樣品（建立資料夾 + 紀錄檔）→ 試算表多一列
+        nd = pg.open_new_sample()
+        nd.v["label"].set("950")
+        nd.v["type"].set("Quad-NbSe2")
+        nd.v["place"].set(nd.places[1])
+        nd.ok()
+        root.update()
+        s950 = pg.find("950")
+        assert s950 and s950["has_folder"] and os.path.isfile(s950["path"]), "新樣品沒有建立資料夾和紀錄檔"
+        assert FR.load(s950["path"])["type"] == "Quad-NbSe2" and pg.sample["label"] == "950"
+        assert pump(lambda: any(len(r) > 1 and r[1] == "950" for r in ws.get_all_values()), 15), "新樣品沒有寫進試算表"
+        nd = pg.open_new_sample()
+        nd.v["label"].set("950")
+        nd.ok()
+        assert nd.winfo_exists() and "已經有" in nd.err.cget("text")
+        nd.destroy()
+        # ---- ☁ 試算表對話框
+        sy = pg.open_sync()
+        root.update()
+        assert "待更新：0 個樣品" in sy.info.cget("text"), sy.info.cget("text")
+        sy.test()
+        assert pump(lambda: "連得上" in sy.info.cget("text"), 10), sy.info.cget("text")
+        sy.destroy()
+    finally:
+        messagebox.askyesno = saved
+        for k in ("sheet_writer", "can_sync"):
+            pg.__dict__.pop(k, None)
 
 
 def _gui_03(app, root, pump, ep):
